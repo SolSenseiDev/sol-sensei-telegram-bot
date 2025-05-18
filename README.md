@@ -1,46 +1,44 @@
-# sol-sensei-telegram-bot
+# 🚀 SolSensei – Smart Trading Bot for Solana
 
-# 🚀 SolSensei – Умный трейдинг-бот для Solana
-
-**SolSensei** — это мощный трейдинг-бот, созданный для анализа и торговли токенами в сети **Solana**. Он объединяет автоматизацию, AI-оценку и телеграм-интерфейс для удобной и безопасной торговли.
+**SolSensei** is a powerful trading bot designed for analyzing and interacting with tokens on the **Solana** blockchain. It features fast contract scanning, wallet management tools, and a Telegram interface for seamless user experience.
 
 ---
 
-## 🔥 Основные возможности
+## 🔥 Features
 
-- ✅ **Анализ токенов**: проверка CA, маркеткап, ликвидность, количество холдеров  
-- 🤖 **AI-оценка рисков**: выявление инсайдерских покупок и потенциальных скамов  
-- ⚙️ **Торговые стратегии**: автоматический скальпинг, DCA, лимитные ордера  
-- 🌐 **WebSocket API**: моментальные обновления по сделкам и ликвидности  
-- 💬 **Интеграция с Telegram**: управление ботом прямо из мессенджера  
-- 🔐 **Безопасность**: работа без передачи приватных ключей
+- ✅ **Token Scanner**: contract address checks, market cap, liquidity, and holder count  
+- 📊 **Early Buyer Analysis**: calculates how much supply was bought in the first 20 transactions  
+- 🧠 **Wallet Insights**: shows the creator wallet and top holders  
+- 💬 **Telegram Bot Interface**: simple commands to scan and monitor tokens directly in chat  
+- 🔁 **SOL Sweep Tool**: withdraw all SOL from connected wallets to a specified address  
+- ⚡ **Fast RPC via Helius**: optimized for real-time scans with low latency
 
 ---
 
-## 🛠️ Стек технологий
+## 🛠️ Tech Stack
 
 - **Solana RPC / Helius / Solscan API**  
 - **Python**: `asyncio`, `aiogram v3`, `requests`, `websockets`  
-- **PostgreSQL**: хранение данных  
-- **Redis**: кеш и подписка на события  
-- **Docker**: контейнеризация и деплой  
-- **WebSocket-сервер**: для real-time взаимодействия с фронтом
+- **PostgreSQL**: for persistent storage  
+- **Redis**: for caching and pub/sub  
+- **Docker**: for deployment and containerization  
+- **WebSocket Server**: for real-time frontend interaction
 
 ---
 
-## ⚡ Быстрый старт
+## ⚡ Getting Started
 
 ```bash
-# 1. Клонируем репозиторий
+# 1. Clone the repository
 git clone https://github.com/yourname/solsensei-bot.git
 cd solsensei-bot
 
-# 2. Устанавливаем зависимости
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Настраиваем переменные окружения
+# 3. Configure environment variables
 cp .env.example .env
 nano .env
 
-# 4. Запускаем бота
+# 4. Start the bot
 python main.py
