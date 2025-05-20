@@ -5,8 +5,6 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 
 from solana.publickey import PublicKey
-from solana.transaction import Transaction
-from solana.system_program import TransferParams, transfer
 from solana.rpc.async_api import AsyncClient
 
 from bot.keyboards.wallets import get_wallets_keyboard
@@ -20,7 +18,10 @@ from bot.services.encryption import encrypt_seed
 from bot.database.models import Wallet, User
 from bot.database.db import async_session
 from bot.states.wallets import WalletStates
-from bot.handlers.start import render_main_menu  # ✅ Updated import
+from bot.handlers.start import render_main_menu
+from bot.utils.user_data import get_usdc_balance, fetch_sol_price
+
+from solders.keypair import Keypair
 
 wallets_router = Router()
 user_selected_wallets = {}
@@ -39,32 +40,56 @@ async def show_wallets(callback: CallbackQuery):
         user = result.scalar_one_or_none()
 
         if not user or not user.wallets:
-            text = (
-                "💼 <b>Your Wallets</b>\n\n"
-                "You don't have any wallets yet. Click ➕ to create one."
+            await callback.message.edit_text(
+                "💼 <b>Your Wallets</b>"
+                "You don't have any wallets yet. Click ➕ to create one.",
+                reply_markup=get_wallets_keyboard([], {}, {}, set())
             )
-            await callback.message.edit_text(text, reply_markup=get_wallets_keyboard([], {}, None))
             await callback.answer()
             return
 
-        balances = {}
-        total = 0.0
+        balances_sol = {}
+        balances_usdc = {}
+        sol_price = await fetch_sol_price()
 
         for wallet in user.wallets:
-            balance = await get_wallet_balance(wallet.address)
-            balances[wallet.address] = balance
-            total += balance
+            sol = await get_wallet_balance(wallet.address)
+            usdc = await get_usdc_balance(wallet.address)
+            balances_sol[wallet.address] = sol
+            balances_usdc[wallet.address] = usdc
 
-        text = "💼 <b>Your Wallets:</b>\n\n"
-        for i, wallet in enumerate(user.wallets, start=1):
-            text += f"↳ ({i}) <code>{wallet.address}</code>\n"
-        text += f"\n<b>Total Balance:</b> {total:.6f} SOL"
-
-        selected = user_selected_wallets.get(telegram_id)
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_wallets_keyboard(user.wallets, balances, selected)
+        selected = user_selected_wallets.get(telegram_id, set())
+        total_usdc_equivalent = sum(
+            balances_usdc.get(wallet.address, 0.0) + balances_sol.get(wallet.address, 0.0) * sol_price
+            for wallet in user.wallets
         )
+        wallets_text = "\n".join(
+            [f"↳ ({i}) <code>{wallet.address}</code>" for i, wallet in enumerate(user.wallets, start=1)]
+        )
+
+        text = (
+            "💼 <b>Your Wallets:</b>\n\n"
+            f"{wallets_text}\n\n"
+            f"<b>Total Balance:</b> <code>${total_usdc_equivalent:.3f}</code>"
+        )
+
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=get_wallets_keyboard(user.wallets, balances_sol, balances_usdc, selected)
+            )
+        except Exception:
+            pass
+
+    await callback.answer()
+
+
+@wallets_router.callback_query(F.data.startswith("copy_wallet_balance:"))
+async def refresh_wallets_on_balance_click(callback: CallbackQuery):
+    try:
+        await show_wallets(callback)
+    except Exception:
+        pass
     await callback.answer()
 
 
@@ -75,9 +100,7 @@ async def create_new_wallet(callback: CallbackQuery):
     encrypted = encrypt_seed(seed)
 
     async with async_session() as session:
-        result = await session.execute(
-            select(User).where(User.telegram_id == telegram_id)
-        )
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -103,82 +126,78 @@ async def create_new_wallet(callback: CallbackQuery):
 async def select_wallet(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     address = callback.data.split("select_wallet:")[1]
-    user_selected_wallets[telegram_id] = address
+
+    selected = user_selected_wallets.setdefault(telegram_id, set())
+    if address in selected:
+        selected.remove(address)
+    else:
+        selected.add(address)
+
     await show_wallets(callback)
 
 
 @wallets_router.callback_query(F.data == "delete_wallet")
 async def delete_selected_wallet(callback: CallbackQuery):
     telegram_id = callback.from_user.id
-    selected = user_selected_wallets.get(telegram_id)
+    selected = user_selected_wallets.get(telegram_id, set())
 
     if not selected:
-        await callback.answer("❗ Please select a wallet first", show_alert=True)
+        await callback.answer("❗ Please select at least one wallet", show_alert=True)
         return
 
     async with async_session() as session:
-        await session.execute(delete(Wallet).where(Wallet.address == selected))
+        for address in selected:
+            await session.execute(delete(Wallet).where(Wallet.address == address))
         await session.commit()
 
-    user_selected_wallets.pop(telegram_id, None)
-    await callback.answer("🗑️ Wallet deleted")
+    user_selected_wallets[telegram_id] = set()
+    await callback.answer("🗑️ Selected wallets deleted")
     await show_wallets(callback)
 
 
-@wallets_router.callback_query(F.data == "withdraw_all")
-async def ask_withdraw_address(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("📤 Enter the Solana wallet address to withdraw the full balance to:")
-    await state.set_state(WalletStates.waiting_for_withdraw_address)
+@wallets_router.callback_query(F.data == "add_wallet")
+async def ask_private_key(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("🔑 Send the private key (in base58) of your wallet:")
+    await state.set_state(WalletStates.waiting_for_private_key)
     await callback.answer()
 
 
-@wallets_router.message(WalletStates.waiting_for_withdraw_address)
-async def withdraw_all_sol(message: Message, state: FSMContext):
-    target_address = message.text.strip()
+@wallets_router.message(WalletStates.waiting_for_private_key)
+async def add_wallet_by_private_key(message: Message, state: FSMContext):
+    telegram_id = message.from_user.id
+    private_key = message.text.strip()
 
     try:
-        recipient = PublicKey(target_address)
+        keypair = Keypair.from_base58_string(private_key)
+        pubkey = str(keypair.pubkey())
     except Exception:
-        await message.answer("❌ Invalid address. Please try again.")
+        await message.answer("❌ Invalid private key. Please try again.")
         return
 
-    telegram_id = message.from_user.id
-    total_sent = 0.0
+    encrypted = encrypt_seed(private_key)
 
     async with async_session() as session:
-        result = await session.execute(
-            select(User).options(selectinload(User.wallets)).where(User.telegram_id == telegram_id)
-        )
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
 
-        if not user or not user.wallets:
-            await message.answer("❗ You have no wallets.")
+        if not user:
+            user = User(telegram_id=telegram_id)
+            session.add(user)
+            await session.flush()
+
+        exists = await session.execute(select(Wallet).where(Wallet.address == pubkey))
+        if exists.scalar_one_or_none():
+            await message.answer("⚠️ Wallet already exists.")
             await state.clear()
             return
 
-        async with AsyncClient(RPC_URL) as client:
-            for wallet in user.wallets:
-                balance = await get_wallet_balance(wallet.address)
-                if balance > 0.001:
-                    try:
-                        keypair = decrypt_keypair(wallet.encrypted_seed)
-                        tx = Transaction()
-                        tx.add(
-                            transfer(
-                                TransferParams(
-                                    from_pubkey=keypair.public_key,
-                                    to_pubkey=recipient,
-                                    lamports=int((balance - 0.000005) * 1e9)
-                                )
-                            )
-                        )
-                        await client.send_transaction(tx, keypair)
-                        total_sent += balance
-                    except Exception as e:
-                        await message.answer(f"⚠️ Error sending from {wallet.address}:\n{e}")
+        wallet = Wallet(address=pubkey, encrypted_seed=encrypted, user_id=user.id)
+        session.add(wallet)
+        await session.commit()
 
-    await message.answer(f"✅ Successfully sent {total_sent:.6f} SOL to:\n<code>{target_address}</code>")
+    await message.answer(f"✅ Wallet <code>{pubkey}</code> has been added.")
     await state.clear()
+    await show_wallets(message)
 
 
 @wallets_router.callback_query(F.data == "back_to_menu")
