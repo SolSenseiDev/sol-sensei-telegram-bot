@@ -7,24 +7,27 @@ from sqlalchemy.orm import selectinload
 from solana.publickey import PublicKey
 from solana.transaction import Transaction
 from solana.system_program import TransferParams, transfer
+from solana.rpc.async_api import AsyncClient
 
 from bot.keyboards.wallets import get_wallets_keyboard
 from bot.keyboards.main_menu import get_main_menu
 from bot.services.solana import (
     generate_wallet,
     get_wallet_balance,
-    decrypt_keypair,
-    get_client
+    decrypt_keypair
 )
 from bot.services.encryption import encrypt_seed
 from bot.database.models import Wallet, User
 from bot.database.db import async_session
 from bot.states.wallets import WalletStates
+from bot.handlers.start import render_main_menu  # ✅ Обновлённый импорт
 
 wallets_router = Router()
 user_selected_wallets = {}
 
-# 💼 Показ всех кошельков
+RPC_URL = "https://api.mainnet-beta.solana.com"
+
+
 @wallets_router.callback_query(F.data == "wallets")
 async def show_wallets(callback: CallbackQuery):
     telegram_id = callback.from_user.id
@@ -41,6 +44,7 @@ async def show_wallets(callback: CallbackQuery):
                 "У вас пока нет кошельков. Нажмите ➕, чтобы создать."
             )
             await callback.message.edit_text(text, reply_markup=get_wallets_keyboard([], {}, None))
+            await callback.answer()
             return
 
         balances = {}
@@ -64,7 +68,6 @@ async def show_wallets(callback: CallbackQuery):
     await callback.answer()
 
 
-# ➕ Создание нового кошелька
 @wallets_router.callback_query(F.data == "new_wallet")
 async def create_new_wallet(callback: CallbackQuery):
     telegram_id = callback.from_user.id
@@ -96,7 +99,6 @@ async def create_new_wallet(callback: CallbackQuery):
     await show_wallets(callback)
 
 
-# ✅ Выбор кошелька
 @wallets_router.callback_query(F.data.startswith("select_wallet:"))
 async def select_wallet(callback: CallbackQuery):
     telegram_id = callback.from_user.id
@@ -105,7 +107,6 @@ async def select_wallet(callback: CallbackQuery):
     await show_wallets(callback)
 
 
-# ❌ Удаление выбранного
 @wallets_router.callback_query(F.data == "delete_wallet")
 async def delete_selected_wallet(callback: CallbackQuery):
     telegram_id = callback.from_user.id
@@ -124,7 +125,6 @@ async def delete_selected_wallet(callback: CallbackQuery):
     await show_wallets(callback)
 
 
-# 📤 Запрос адреса вывода
 @wallets_router.callback_query(F.data == "withdraw_all")
 async def ask_withdraw_address(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("📤 Введите адрес Solana-кошелька, на который перевести весь баланс:")
@@ -132,7 +132,6 @@ async def ask_withdraw_address(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# 📤 Обработка ввода адреса и вывод всех средств
 @wallets_router.message(WalletStates.waiting_for_withdraw_address)
 async def withdraw_all_sol(message: Message, state: FSMContext):
     target_address = message.text.strip()
@@ -157,41 +156,31 @@ async def withdraw_all_sol(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        client = get_client()
-
-        for wallet in user.wallets:
-            balance = await get_wallet_balance(wallet.address)
-            if balance > 0.001:
-                try:
-                    keypair = decrypt_keypair(wallet.encrypted_seed)
-                    tx = Transaction()
-                    tx.add(
-                        transfer(
-                            TransferParams(
-                                from_pubkey=keypair.public_key,
-                                to_pubkey=recipient,
-                                lamports=int((balance - 0.000005) * 1e9)
+        async with AsyncClient(RPC_URL) as client:
+            for wallet in user.wallets:
+                balance = await get_wallet_balance(wallet.address)
+                if balance > 0.001:
+                    try:
+                        keypair = decrypt_keypair(wallet.encrypted_seed)
+                        tx = Transaction()
+                        tx.add(
+                            transfer(
+                                TransferParams(
+                                    from_pubkey=keypair.public_key,
+                                    to_pubkey=recipient,
+                                    lamports=int((balance - 0.000005) * 1e9)
+                                )
                             )
                         )
-                    )
-                    await client.send_transaction(tx, keypair)
-                    total_sent += balance
-                except Exception as e:
-                    await message.answer(f"⚠️ Ошибка при отправке с {wallet.address}:\n{e}")
+                        await client.send_transaction(tx, keypair)
+                        total_sent += balance
+                    except Exception as e:
+                        await message.answer(f"⚠️ Ошибка при отправке с {wallet.address}:\n{e}")
 
     await message.answer(f"✅ Успешно отправлено {total_sent:.6f} SOL на адрес:\n<code>{target_address}</code>")
     await state.clear()
 
 
-# ⬅️ Назад
 @wallets_router.callback_query(F.data == "back_to_menu")
 async def back_to_main_menu(callback: CallbackQuery):
-    text = (
-        "👋 <b>SolSensei мастер торговли в экосистеме Solana.</b>\n\n"
-        "💰 <b>Цена SOL:</b> <code>185.25$</code>\n\n"
-        "<b>Основной кошелек:</b>\n"
-        "↳ <code>5A79gF...XoR3</code>\n"
-        "↳ Баланс: <code>0.000995002 SOL</code>"
-    )
-    await callback.message.edit_text(text, reply_markup=get_main_menu())
-    await callback.answer()
+    await render_main_menu(callback, callback.from_user.id)
