@@ -20,7 +20,7 @@ from bot.services.encryption import encrypt_seed
 from bot.database.models import Wallet, User
 from bot.database.db import async_session
 from bot.states.wallets import WalletStates
-from bot.handlers.start import render_main_menu  # ✅ Обновлённый импорт
+from bot.handlers.start import render_main_menu  # ✅ Updated import
 
 wallets_router = Router()
 user_selected_wallets = {}
@@ -40,8 +40,8 @@ async def show_wallets(callback: CallbackQuery):
 
         if not user or not user.wallets:
             text = (
-                "💼 <b>Ваши кошельки</b>\n\n"
-                "У вас пока нет кошельков. Нажмите ➕, чтобы создать."
+                "💼 <b>Your Wallets</b>\n\n"
+                "You don't have any wallets yet. Click ➕ to create one."
             )
             await callback.message.edit_text(text, reply_markup=get_wallets_keyboard([], {}, None))
             await callback.answer()
@@ -55,10 +55,10 @@ async def show_wallets(callback: CallbackQuery):
             balances[wallet.address] = balance
             total += balance
 
-        text = "💼 <b>Ваши кошельки:</b>\n\n"
+        text = "💼 <b>Your Wallets:</b>\n\n"
         for i, wallet in enumerate(user.wallets, start=1):
             text += f"↳ ({i}) <code>{wallet.address}</code>\n"
-        text += f"\n<b>Общий баланс:</b> {total:.6f} SOL"
+        text += f"\n<b>Total Balance:</b> {total:.6f} SOL"
 
         selected = user_selected_wallets.get(telegram_id)
         await callback.message.edit_text(
@@ -90,10 +90,10 @@ async def create_new_wallet(callback: CallbackQuery):
         await session.commit()
 
     text_private = (
-        "🆕 <b>Информация о новом кошельке:</b>\n\n"
-        f"<b>Адрес:</b>\n<code>{pubkey}</code>\n\n"
-        f"<b>Приватный ключ (base58):</b>\n<code>{seed}</code>\n\n"
-        "⚠️ <b>Сохрани это сообщение. Приватный ключ = доступ к кошельку.</b>"
+        "🆕 <b>New Wallet Info:</b>\n\n"
+        f"<b>Address:</b>\n<code>{pubkey}</code>\n\n"
+        f"<b>Private Key (base58):</b>\n<code>{seed}</code>\n\n"
+        "⚠️ <b>Save this message. The private key = access to your wallet.</b>"
     )
     await callback.message.answer(text_private)
     await show_wallets(callback)
@@ -113,7 +113,7 @@ async def delete_selected_wallet(callback: CallbackQuery):
     selected = user_selected_wallets.get(telegram_id)
 
     if not selected:
-        await callback.answer("❗ Сначала выбери кошелек", show_alert=True)
+        await callback.answer("❗ Please select a wallet first", show_alert=True)
         return
 
     async with async_session() as session:
@@ -121,13 +121,13 @@ async def delete_selected_wallet(callback: CallbackQuery):
         await session.commit()
 
     user_selected_wallets.pop(telegram_id, None)
-    await callback.answer("🗑️ Кошелек удалён")
+    await callback.answer("🗑️ Wallet deleted")
     await show_wallets(callback)
 
 
 @wallets_router.callback_query(F.data == "withdraw_all")
 async def ask_withdraw_address(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("📤 Введите адрес Solana-кошелька, на который перевести весь баланс:")
+    await callback.message.edit_text("📤 Enter the Solana wallet address to withdraw the full balance to:")
     await state.set_state(WalletStates.waiting_for_withdraw_address)
     await callback.answer()
 
@@ -139,7 +139,7 @@ async def withdraw_all_sol(message: Message, state: FSMContext):
     try:
         recipient = PublicKey(target_address)
     except Exception:
-        await message.answer("❌ Неверный адрес. Попробуйте снова.")
+        await message.answer("❌ Invalid address. Please try again.")
         return
 
     telegram_id = message.from_user.id
@@ -152,7 +152,7 @@ async def withdraw_all_sol(message: Message, state: FSMContext):
         user = result.scalar_one_or_none()
 
         if not user or not user.wallets:
-            await message.answer("❗ У вас нет кошельков.")
+            await message.answer("❗ You have no wallets.")
             await state.clear()
             return
 
@@ -175,9 +175,9 @@ async def withdraw_all_sol(message: Message, state: FSMContext):
                         await client.send_transaction(tx, keypair)
                         total_sent += balance
                     except Exception as e:
-                        await message.answer(f"⚠️ Ошибка при отправке с {wallet.address}:\n{e}")
+                        await message.answer(f"⚠️ Error sending from {wallet.address}:\n{e}")
 
-    await message.answer(f"✅ Успешно отправлено {total_sent:.6f} SOL на адрес:\n<code>{target_address}</code>")
+    await message.answer(f"✅ Successfully sent {total_sent:.6f} SOL to:\n<code>{target_address}</code>")
     await state.clear()
 
 

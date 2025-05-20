@@ -16,16 +16,17 @@ def get_wallets_keyboard(wallets: list, balances: dict, selected: str = None) ->
         ])
 
     keyboard.append([
-        InlineKeyboardButton(text="➕ Создать кошелек", callback_data="new_wallet"),
-        InlineKeyboardButton(text="❌ Удалить выбранный", callback_data="delete_wallet")
+        InlineKeyboardButton(text="➕ Create Wallet", callback_data="new_wallet"),
+        InlineKeyboardButton(text="❌ Delete Selected", callback_data="delete_wallet")
     ])
 
     keyboard.append([
-        InlineKeyboardButton(text="📤 Вывести весь SOL", callback_data="withdraw_all")
+        InlineKeyboardButton(text="📤 Withdraw All SOL", callback_data="withdraw_all")
     ])
 
     keyboard.append([
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")
+        InlineKeyboardButton(text="⬅️ Back", callback_data="back_to_menu")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+

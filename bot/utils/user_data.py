@@ -28,4 +28,4 @@ async def get_first_wallet_and_balance(telegram_id: int):
             balance = await get_wallet_balance(wallet.address)
             return wallet.address, balance
 
-        return "вы ещё не создали кошелек", 0.0
+        return "you haven't created a wallet yet", 0.0

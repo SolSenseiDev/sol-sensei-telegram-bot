@@ -17,16 +17,16 @@ def get_main_menu() -> InlineKeyboardMarkup:
         ]
     )
 
-# Обработчики кнопок меню (временно заглушки)
+# Menu button handlers (temporary stubs)
 
 @main_menu_router.callback_query(lambda c: c.data == "buy_sell")
 async def buy_sell_handler(callback: CallbackQuery):
-    await callback.answer("🚧 Раздел 'Buy & Sell' в разработке", show_alert=True)
+    await callback.answer("🚧 The 'Buy & Sell' section is under development", show_alert=True)
 
 @main_menu_router.callback_query(lambda c: c.data == "settings")
 async def settings_handler(callback: CallbackQuery):
-    await callback.answer("⚙️ Настройки скоро появятся", show_alert=True)
+    await callback.answer("⚙️ Settings will be available soon", show_alert=True)
 
 @main_menu_router.callback_query(lambda c: c.data == "help")
 async def help_handler(callback: CallbackQuery):
-    await callback.answer("❓ Обратитесь к @admin или напишите /start", show_alert=True)
+    await callback.answer("❓ Contact @admin or type /start", show_alert=True)

@@ -4,7 +4,7 @@ from solana.publickey import PublicKey
 from base58 import b58encode, b58decode
 import os
 
-# Официальный RPC
+
 RPC_URL = "https://api.mainnet-beta.solana.com"
 
 def generate_wallet():

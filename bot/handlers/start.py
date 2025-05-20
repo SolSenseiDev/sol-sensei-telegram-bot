@@ -12,11 +12,11 @@ async def render_main_menu(target, telegram_id: int):
     wallet_address, balance = await get_first_wallet_and_balance(telegram_id)
 
     text = (
-        "👋 <b>SolSensei</b> мастер торговли в экосистеме Solana.\n\n"
-        f"💰 <b>Цена SOL:</b> <code>{sol_price:.2f}$</code>\n\n"
-        f"<b>Первый кошелек:</b>\n"
+        "👋 <b>SolSensei</b> is your trading master in the Solana ecosystem.\n\n"
+        f"💰 <b>SOL Price:</b> <code>{sol_price:.2f}$</code>\n\n"
+        f"<b>Primary Wallet:</b>\n"
         f"↳ <code>{wallet_address}</code>\n"
-        f"↳ Баланс: <code>{balance:.9f} SOL</code>"
+        f"↳ Balance: <code>{balance:.9f} SOL</code>"
     )
 
     if isinstance(target, Message):
