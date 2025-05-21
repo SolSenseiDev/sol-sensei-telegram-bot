@@ -1,32 +1,30 @@
+from datetime import datetime, timezone
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
-
-from solana.publickey import PublicKey
-from solana.rpc.async_api import AsyncClient
+from solders.keypair import Keypair
+import base58
 
 from bot.keyboards.wallets import get_wallets_keyboard
-from bot.keyboards.main_menu import get_main_menu
-from bot.services.solana import (
-    generate_wallet,
-    get_wallet_balance,
-    decrypt_keypair
-)
+from bot.services.solana import generate_wallet, get_wallet_balance
 from bot.services.encryption import encrypt_seed
 from bot.database.models import Wallet, User
 from bot.database.db import async_session
 from bot.states.wallets import WalletStates
 from bot.handlers.start import render_main_menu
-from bot.utils.user_data import get_usdc_balance, fetch_sol_price
-
-from solders.keypair import Keypair
+from bot.utils.value_data import (
+    get_usdc_balance,
+    fetch_sol_price,
+    calculate_total_usdc_equivalent,
+    get_balances_for_wallets,
+    get_wallets_text
+)
 
 wallets_router = Router()
 user_selected_wallets = {}
-
-RPC_URL = "https://api.mainnet-beta.solana.com"
 
 
 @wallets_router.callback_query(F.data == "wallets")
@@ -40,37 +38,32 @@ async def show_wallets(callback: CallbackQuery):
         user = result.scalar_one_or_none()
 
         if not user or not user.wallets:
-            await callback.message.edit_text(
-                "💼 <b>Your Wallets</b>"
-                "You don't have any wallets yet. Click ➕ to create one.",
-                reply_markup=get_wallets_keyboard([], {}, {}, set())
-            )
+            try:
+                await callback.message.edit_text(
+                    "💼 <b>Your Wallets</b>\n\n"
+                    "You don't have any wallets yet. Click ➕ to create one.",
+                    reply_markup=get_wallets_keyboard([], {}, {}, set())
+                )
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e):
+                    raise e
             await callback.answer()
             return
 
-        balances_sol = {}
-        balances_usdc = {}
         sol_price = await fetch_sol_price()
-
-        for wallet in user.wallets:
-            sol = await get_wallet_balance(wallet.address)
-            usdc = await get_usdc_balance(wallet.address)
-            balances_sol[wallet.address] = sol
-            balances_usdc[wallet.address] = usdc
-
+        balances_sol, balances_usdc = await get_balances_for_wallets(user.wallets)
         selected = user_selected_wallets.get(telegram_id, set())
-        total_usdc_equivalent = sum(
-            balances_usdc.get(wallet.address, 0.0) + balances_sol.get(wallet.address, 0.0) * sol_price
-            for wallet in user.wallets
+
+        total_usdc_equivalent = calculate_total_usdc_equivalent(
+            user.wallets, balances_sol, balances_usdc, sol_price
         )
-        wallets_text = "\n".join(
-            [f"↳ ({i}) <code>{wallet.address}</code>" for i, wallet in enumerate(user.wallets, start=1)]
-        )
+        wallets_text = get_wallets_text(user.wallets)
 
         text = (
             "💼 <b>Your Wallets:</b>\n\n"
             f"{wallets_text}\n\n"
-            f"<b>Total Balance:</b> <code>${total_usdc_equivalent:.3f}</code>"
+            f"<b>Total Balance:</b> <code>${total_usdc_equivalent:.3f}</code>\n\n"
+            f"⏱ <i>Last updated at {datetime.now(timezone.utc):%H:%M:%S} UTC</i>"
         )
 
         try:
@@ -78,8 +71,9 @@ async def show_wallets(callback: CallbackQuery):
                 text,
                 reply_markup=get_wallets_keyboard(user.wallets, balances_sol, balances_usdc, selected)
             )
-        except Exception:
-            pass
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise e
 
     await callback.answer()
 
@@ -94,7 +88,7 @@ async def refresh_wallets_on_balance_click(callback: CallbackQuery):
 
 
 @wallets_router.callback_query(F.data == "new_wallet")
-async def create_new_wallet(callback: CallbackQuery):
+async def create_new_wallet(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     pubkey, seed = generate_wallet()
     encrypted = encrypt_seed(seed)
@@ -118,21 +112,27 @@ async def create_new_wallet(callback: CallbackQuery):
         f"<b>Private Key (base58):</b>\n<code>{seed}</code>\n\n"
         "⚠️ <b>Save this message. The private key = access to your wallet.</b>"
     )
+
+    refresh_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh Wallets", callback_data="wallets")]
+        ]
+    )
+
     await callback.message.answer(text_private)
-    await show_wallets(callback)
+    await callback.message.answer("👇 Click below to refresh your wallet view:", reply_markup=refresh_markup)
+    await callback.answer()
 
 
 @wallets_router.callback_query(F.data.startswith("select_wallet:"))
 async def select_wallet(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     address = callback.data.split("select_wallet:")[1]
-
     selected = user_selected_wallets.setdefault(telegram_id, set())
     if address in selected:
         selected.remove(address)
     else:
         selected.add(address)
-
     await show_wallets(callback)
 
 
@@ -168,10 +168,13 @@ async def add_wallet_by_private_key(message: Message, state: FSMContext):
     private_key = message.text.strip()
 
     try:
-        keypair = Keypair.from_base58_string(private_key)
+        decoded = base58.b58decode(private_key)
+        if len(decoded) != 64:
+            raise ValueError("Keypair must be 64 bytes")
+        keypair = Keypair.from_bytes(decoded)
         pubkey = str(keypair.pubkey())
     except Exception:
-        await message.answer("❌ Invalid private key. Please try again.")
+        await message.answer("❌ <b>Invalid private key</b>. Please make sure it’s a valid base58-encoded 64-byte key.")
         return
 
     encrypted = encrypt_seed(private_key)
@@ -179,7 +182,6 @@ async def add_wallet_by_private_key(message: Message, state: FSMContext):
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
-
         if not user:
             user = User(telegram_id=telegram_id)
             session.add(user)
@@ -195,9 +197,15 @@ async def add_wallet_by_private_key(message: Message, state: FSMContext):
         session.add(wallet)
         await session.commit()
 
-    await message.answer(f"✅ Wallet <code>{pubkey}</code> has been added.")
     await state.clear()
-    await show_wallets(message)
+    await message.answer(f"✅ Wallet <code>{pubkey}</code> has been added.")
+
+    refresh_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh Wallets", callback_data="wallets")]
+        ]
+    )
+    await message.answer("👇 Click below to refresh your wallet view:", reply_markup=refresh_markup)
 
 
 @wallets_router.callback_query(F.data == "back_to_menu")
