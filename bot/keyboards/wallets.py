@@ -24,7 +24,7 @@ def get_wallets_keyboard(wallets: list, balances_sol: dict, balances_usdc: dict,
         InlineKeyboardButton(text="♻️ Refresh", callback_data="wallets")
     ])
     keyboard.append([
-        InlineKeyboardButton(text="🔁 Swap", callback_data="swap_wallet"),
+        InlineKeyboardButton(text="🔁 Swap", callback_data="swap"),
         InlineKeyboardButton(text="📤 Withdraw", callback_data="withdraw_all"),
         InlineKeyboardButton(text="❌ Delete", callback_data="delete_wallet")
     ])

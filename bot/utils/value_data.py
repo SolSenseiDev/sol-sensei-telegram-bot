@@ -1,7 +1,10 @@
 import aiohttp
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from bot.database.models import Wallet
+from bot.database.models import Wallet, User
 from bot.services.solana import get_wallet_balance
 
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
@@ -83,3 +86,16 @@ def get_wallets_text(wallets: List[Wallet]) -> str:
     return "\n".join(
         [f"↳ ({i}) <code>{wallet.address}</code>" for i, wallet in enumerate(wallets, start=1)]
     )
+
+
+async def get_user_with_wallets(telegram_id: int, session: AsyncSession) -> Optional[User]:
+    """Fetch user with preloaded wallets by Telegram ID."""
+    result = await session.execute(
+        select(User).options(selectinload(User.wallets)).where(User.telegram_id == telegram_id)
+    )
+    return result.scalar_one_or_none()
+
+
+def get_first_wallet(wallets: List[Wallet]) -> Optional[str]:
+    """Returns the address of the first wallet in the list."""
+    return wallets[0].address if wallets else None

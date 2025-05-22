@@ -4,12 +4,11 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select, delete
-from sqlalchemy.orm import selectinload
 from solders.keypair import Keypair
 import base58
 
 from bot.keyboards.wallets import get_wallets_keyboard
-from bot.services.solana import generate_wallet, get_wallet_balance
+from bot.services.solana import generate_wallet
 from bot.services.encryption import encrypt_seed
 from bot.database.models import Wallet, User
 from bot.database.db import async_session
@@ -20,7 +19,8 @@ from bot.utils.value_data import (
     fetch_sol_price,
     calculate_total_usdc_equivalent,
     get_balances_for_wallets,
-    get_wallets_text
+    get_wallets_text,
+    get_user_with_wallets,
 )
 
 wallets_router = Router()
@@ -32,10 +32,7 @@ async def show_wallets(callback: CallbackQuery):
     telegram_id = callback.from_user.id
 
     async with async_session() as session:
-        result = await session.execute(
-            select(User).options(selectinload(User.wallets)).where(User.telegram_id == telegram_id)
-        )
-        user = result.scalar_one_or_none()
+        user = await get_user_with_wallets(telegram_id, session)
 
         if not user or not user.wallets:
             try:
