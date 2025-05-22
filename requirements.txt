@@ -3,6 +3,6 @@ python-dotenv
 cryptography
 sqlalchemy
 asyncpg
-solana==0.27.0
+solana>=0.36.0
 aiohttp
 base58
