@@ -8,7 +8,7 @@ LAMPORTS_PER_SOL = 1_000_000_000
 
 
 def generate_wallet() -> tuple[str, str]:
-    keypair = Keypair.generate()
+    keypair = Keypair()  # ← Вот так создается новый кошелек
     seed = b58encode(bytes(keypair)).decode()
     pubkey = str(keypair.pubkey())
     return pubkey, seed
