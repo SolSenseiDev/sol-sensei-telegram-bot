@@ -53,3 +53,8 @@ pub fn respond_empty(result: Result<()>) {
 
     println!("{}", serde_json::to_string(&response).unwrap());
 }
+
+/// 💸 Перевод SOL → микролампорты (1 SOL = 1_000_000_000 lamports = 1_000_000_000_000 μLamports)
+pub fn sol_to_lamports(sol: f64) -> u64 {
+    (sol * 1_000_000_000.0) as u64
+}
