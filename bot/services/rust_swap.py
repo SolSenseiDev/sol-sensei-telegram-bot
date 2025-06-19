@@ -6,7 +6,7 @@ from solders.keypair import Keypair
 from bot.services.encryption import decrypt_seed
 
 
-def call_rust_withdraw_usdc(keypair: Keypair, to_address: str, amount: int) -> dict:
+def call_rust_swapper(action: str, keypair: Keypair, ca: str = None, amount: int = None) -> dict:
     try:
         privkey_b58 = base58.b58encode(bytes(keypair)).decode()
         binary_path = os.path.join("bin", "rust_swapper.exe" if os.name == "nt" else "rust_swapper")
@@ -14,108 +14,28 @@ def call_rust_withdraw_usdc(keypair: Keypair, to_address: str, amount: int) -> d
         if not os.path.isfile(binary_path):
             raise FileNotFoundError("Rust binary not found.")
 
-        payload = json.dumps({
+        payload = {
+            "action": action,
             "private_key": privkey_b58,
-            "to_address": to_address,
-            "amount": amount
-        })
-
-        proc = subprocess.run(
-            [binary_path, "withdraw_usdc"],
-            input=payload.encode(),
-            capture_output=True,
-            timeout=30,
-        )
-
-        stdout = proc.stdout.decode().strip()
-        stderr = proc.stderr.decode().strip()
-
-        if stderr:
-            raise Exception(stderr)
-        if not stdout:
-            raise Exception("Rust returned empty output")
-
-        result = json.loads(stdout)
-        if not result.get("success"):
-            raise Exception(result.get("error", "Unknown Rust error"))
-
-        return result
-
-    except Exception as e:
-        return {
-            "success": False,
-            "txid": None,
-            "error": str(e),
         }
-
-
-def call_rust_withdraw(keypair: Keypair, to_address: str, lamports: int) -> dict:
-    try:
-        privkey_b58 = base58.b58encode(bytes(keypair)).decode()
-        binary_path = os.path.join("bin", "rust_swapper.exe" if os.name == "nt" else "rust_swapper")
-
-        if not os.path.isfile(binary_path):
-            raise FileNotFoundError("Rust binary not found.")
-
-        payload = json.dumps({
-            "private_key": privkey_b58,
-            "to_address": to_address,
-            "amount": lamports
-        })
-
-        proc = subprocess.run(
-            [binary_path, "withdraw_sol"],
-            input=payload.encode(),
-            capture_output=True,
-            timeout=30,
-        )
-
-        stdout = proc.stdout.decode().strip()
-        stderr = proc.stderr.decode().strip()
-
-        if stderr:
-            raise Exception(stderr)
-        if not stdout:
-            raise Exception("Rust returned empty output")
-
-        result = json.loads(stdout)
-        if not result.get("success"):
-            raise Exception(result.get("error", "Unknown Rust error"))
-
-        return result
-
-    except Exception as e:
-        return {
-            "success": False,
-            "txid": None,
-            "error": str(e),
-        }
-
-
-def call_rust_swapper(mode: str, keypair: Keypair, amount: int = None) -> dict:
-    try:
-        privkey_b58 = base58.b58encode(bytes(keypair)).decode()
-        binary_path = os.path.join("bin", "rust_swapper.exe" if os.name == "nt" else "rust_swapper")
-
-        if not os.path.isfile(binary_path):
-            raise FileNotFoundError("Rust binary not found.")
-
-        input_lines = privkey_b58
+        if ca is not None:
+            payload["ca"] = str(ca)
         if amount is not None:
-            input_lines += f"\n{amount}"
+            payload["amount"] = amount
 
         proc = subprocess.run(
-            [binary_path, mode],
-            input=input_lines.encode(),
+            [binary_path],
+            input=json.dumps(payload),
             capture_output=True,
             timeout=30,
+            text=True
         )
 
-        stdout = proc.stdout.decode().strip()
-        stderr = proc.stderr.decode().strip()
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
 
         if stderr:
-            raise Exception(stderr)
+            raise Exception(f"Rust STDERR: {stderr}")
         if not stdout:
             raise Exception("Rust returned empty output")
 
@@ -136,7 +56,7 @@ def call_rust_swapper(mode: str, keypair: Keypair, amount: int = None) -> dict:
 # === Публичные async-функции ===
 
 async def swap_all_sol_to_usdc(keypair: Keypair, lamports: int) -> str:
-    result = call_rust_swapper("sol_to_usdc", keypair)
+    result = call_rust_swapper("sol_to_usdc", keypair, amount=lamports)
     if result["success"]:
         return result["txid"]
     raise Exception(result["error"])
@@ -150,30 +70,28 @@ async def swap_all_usdc_to_sol(keypair: Keypair) -> str:
 
 
 async def swap_fixed_sol_to_usdc(keypair: Keypair, lamports: int) -> str:
-    result = call_rust_swapper("sol_to_usdc_fixed", keypair, lamports)
+    result = call_rust_swapper("swap_sol_to_usdc_fixed", keypair, amount=lamports)
     if result["success"]:
         return result["txid"]
     raise Exception(result["error"])
 
 
 async def swap_fixed_usdc_to_sol(keypair: Keypair, usdc_amount: int) -> str:
-    result = call_rust_swapper("usdc_to_sol_fixed", keypair, usdc_amount)
+    result = call_rust_swapper("swap_usdc_to_sol_fixed", keypair, amount=usdc_amount)
     if result["success"]:
         return result["txid"]
     raise Exception(result["error"])
 
 
 async def withdraw_sol_from_wallets(wallets, to_address: str, amount_sol: float):
-    success = []
-    failed = {}
+    success, failed = [], {}
     lamports = int(amount_sol * 1_000_000_000)
 
     for w in wallets:
         try:
             decrypted = decrypt_seed(w.encrypted_seed)
             keypair = Keypair.from_bytes(base58.b58decode(decrypted))
-            # 👇 Передаём to_address и сумму
-            result = call_rust_withdraw(keypair, to_address, lamports)
+            result = call_rust_swapper("withdraw_sol", keypair, amount=lamports, ca=to_address)
             if result["success"]:
                 success.append(w.address)
             else:
@@ -185,15 +103,14 @@ async def withdraw_sol_from_wallets(wallets, to_address: str, amount_sol: float)
 
 
 async def withdraw_usdc_from_wallets(wallets, to_address: str, amount_usdc: float):
-    success = []
-    failed = {}
-    usdc_amount = int(amount_usdc * 1_000_000)  # 6 знаков после запятой
+    success, failed = [], {}
+    usdc_amount = int(amount_usdc * 1_000_000)
 
     for w in wallets:
         try:
             decrypted = decrypt_seed(w.encrypted_seed)
             keypair = Keypair.from_bytes(base58.b58decode(decrypted))
-            result = call_rust_withdraw_usdc(keypair, to_address, usdc_amount)
+            result = call_rust_swapper("withdraw_usdc", keypair, amount=usdc_amount, ca=to_address)
             if result["success"]:
                 success.append(w.address)
             else:
@@ -208,7 +125,7 @@ async def withdraw_sol_txid(wallet, to_address: str, amount_sol: float) -> str:
     decrypted = decrypt_seed(wallet.encrypted_seed)
     keypair = Keypair.from_bytes(base58.b58decode(decrypted))
     lamports = int(amount_sol * 1_000_000_000)
-    result = call_rust_withdraw(keypair, to_address, lamports)
+    result = call_rust_swapper("withdraw_sol", keypair, amount=lamports, ca=to_address)
     if result["success"]:
         return result["txid"]
     raise Exception(result["error"])
@@ -218,7 +135,26 @@ async def withdraw_usdc_txid(wallet, to_address: str, amount_usdc: float) -> str
     decrypted = decrypt_seed(wallet.encrypted_seed)
     keypair = Keypair.from_bytes(base58.b58decode(decrypted))
     usdc_amount = int(amount_usdc * 1_000_000)
-    result = call_rust_withdraw_usdc(keypair, to_address, usdc_amount)
+    result = call_rust_swapper("withdraw_usdc", keypair, amount=usdc_amount, ca=to_address)
     if result["success"]:
         return result["txid"]
     raise Exception(result["error"])
+
+
+async def buy_sell_token_from_wallets(wallets: list, ca: str, mode: str, amount: int | None = None):
+    success, failed = [], {}
+    rust_mode = "buy_fixed" if mode == "buy" else "sell_fixed"
+
+    for w in wallets:
+        try:
+            decrypted = decrypt_seed(w.encrypted_seed)
+            keypair = Keypair.from_bytes(base58.b58decode(decrypted))
+            result = call_rust_swapper(rust_mode, keypair, ca=ca, amount=amount)
+            if result["success"]:
+                success.append((w.address, result["txid"]))
+            else:
+                failed[w.address] = result["error"]
+        except Exception as e:
+            failed[w.address] = str(e)
+
+    return success, failed
