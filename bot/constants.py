@@ -1,7 +1,7 @@
 from solders.pubkey import Pubkey
 
 LAMPORTS_PER_SOL = 1_000_000_000
-MIN_LAMPORTS_RESERVE_SOL = 0.0025
+MIN_LAMPORTS_RESERVE_SOL = 0.0032
 MIN_LAMPORTS_RESERVE = int(MIN_LAMPORTS_RESERVE_SOL * LAMPORTS_PER_SOL)
 
 RPC_URL = "https://api.mainnet-beta.solana.com"
