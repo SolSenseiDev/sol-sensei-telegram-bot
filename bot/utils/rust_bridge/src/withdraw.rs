@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use std::io::{self, Read};
 use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
@@ -15,7 +14,7 @@ use solana_sdk::{
 use spl_associated_token_account::{get_associated_token_address, instruction::create_associated_token_account};
 use spl_token::{instruction::transfer_checked, id as token_program_id};
 
-use crate::utils::{decode_keypair, respond_empty, respond_with_txid};
+use crate::utils::{decode_keypair, respond_empty, respond_with_txid, JsonInput};
 
 const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -23,25 +22,28 @@ const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 struct WithdrawRequest {
     private_key: String,
     to_address: String,
-    amount: u64, // В лампортах или в USDC (6 знаков)
+    amount: u64,
 }
 
-pub async fn handle_withdraw_sol() -> Result<()> {
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
+pub async fn handle_withdraw_sol(input: JsonInput) -> Result<()> {
+    let req = WithdrawRequest {
+        private_key: input.private_key,
+        to_address: input.ca.ok_or_else(|| anyhow!("Missing `ca` (to_address)"))?,
+        amount: input.amount.ok_or_else(|| anyhow!("Missing `amount`"))?,
+    };
 
-    let req: WithdrawRequest = serde_json::from_str(&input)?;
     let keypair = decode_keypair(&req.private_key)?;
+    let from = keypair.pubkey();
     let to_pubkey = Pubkey::from_str(&req.to_address)?;
 
     let rpc = RpcClient::new_with_commitment(
         "https://api.mainnet-beta.solana.com".to_string(),
         CommitmentConfig::confirmed(),
     );
-    let blockhash = rpc.get_latest_blockhash().await?;
 
-    let ix = system_instruction::transfer(&keypair.pubkey(), &to_pubkey, req.amount);
-    let msg = Message::new(&[ix], Some(&keypair.pubkey()));
+    let blockhash = rpc.get_latest_blockhash().await?;
+    let ix = system_instruction::transfer(&from, &to_pubkey, req.amount);
+    let msg = Message::new(&[ix], Some(&from));
     let tx = Transaction::new(&[&keypair], msg, blockhash);
 
     match rpc.send_and_confirm_transaction(&tx).await {
@@ -52,11 +54,13 @@ pub async fn handle_withdraw_sol() -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_withdraw_usdc() -> Result<()> {
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
+pub async fn handle_withdraw_usdc(input: JsonInput) -> Result<()> {
+    let req = WithdrawRequest {
+        private_key: input.private_key,
+        to_address: input.ca.ok_or_else(|| anyhow!("Missing `ca` (to_address)"))?,
+        amount: input.amount.ok_or_else(|| anyhow!("Missing `amount`"))?,
+    };
 
-    let req: WithdrawRequest = serde_json::from_str(&input)?;
     let keypair = decode_keypair(&req.private_key)?;
     let from = keypair.pubkey();
     let to = Pubkey::from_str(&req.to_address)?;
@@ -69,11 +73,11 @@ pub async fn handle_withdraw_usdc() -> Result<()> {
         "https://api.mainnet-beta.solana.com".to_string(),
         CommitmentConfig::confirmed(),
     );
+
     let blockhash = rpc.get_latest_blockhash().await?;
 
     let mut instructions = vec![];
 
-    // если нет ATA у получателя — создаём
     if rpc.get_account(&to_ata).await.is_err() {
         let create_ix = create_associated_token_account(&from, &to, &mint, &token_program_id());
         instructions.push(create_ix);

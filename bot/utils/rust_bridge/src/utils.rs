@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bs58;
+use serde::{Deserialize, Serialize};
 use solana_sdk::signature::Keypair;
-use serde::Serialize;
 
 /// 🔐 Декодируем base58 приватник в Keypair
 pub fn decode_keypair(base58_str: &str) -> Result<Keypair> {
@@ -54,7 +54,23 @@ pub fn respond_empty(result: Result<()>) {
     println!("{}", serde_json::to_string(&response).unwrap());
 }
 
-/// 💸 Перевод SOL → микролампорты (1 SOL = 1_000_000_000 lamports = 1_000_000_000_000 μLamports)
+/// 💸 Перевод SOL → лампорты (1 SOL = 1_000_000_000 lamports)
 pub fn sol_to_lamports(sol: f64) -> u64 {
     (sol * 1_000_000_000.0) as u64
+}
+
+/// 💰 Вычитаем комиссию 0.0032 SOL из общего баланса (в лампортах)
+pub fn deduct_swap_fee(sol_balance: u64) -> u64 {
+    const FEE_LAMPORTS: u64 = 4_500_000;
+    sol_balance.saturating_sub(FEE_LAMPORTS)
+}
+
+/// 📥 Универсальный JSON-вход от Python
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JsonInput {
+    pub action: String,
+    pub private_key: String,
+    pub amount: Option<u64>,
+    pub to_address: Option<String>,
+    pub ca: Option<String>,
 }

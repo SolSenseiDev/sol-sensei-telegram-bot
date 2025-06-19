@@ -1,11 +1,10 @@
 use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::Client;
-use serde::{Deserialize};
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::Value;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
     message::{Message, VersionedMessage},
@@ -17,27 +16,18 @@ use solana_sdk::{
 use spl_associated_token_account::{
     get_associated_token_address, instruction::create_associated_token_account,
 };
-use spl_token::{native_mint, state::Account as TokenAccount, id as token_program_id};
+use spl_token::{state::Account as TokenAccount, id as token_program_id};
 use tokio::time::{sleep, Duration};
 
-use crate::utils::{decode_keypair, sol_to_lamports, JsonInput};
+use crate::utils::{decode_keypair, respond_empty, respond_with_txid, sol_to_lamports};
 
 const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
-const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const FEE_SOL: f64 = 0.001;
-const BUFFER_SOL: f64 = 0.0045;
 
 #[derive(Debug, Deserialize)]
 struct SwapResponse {
     #[serde(rename = "swapTransaction")]
     swap_transaction: String,
-}
-
-fn json_ok(txid: &str) -> Value {
-    json!({
-        "success": true,
-        "txid": txid
-    })
 }
 
 async fn get_token_balance(rpc: &RpcClient, owner: &Pubkey, mint: &str) -> Result<u64> {
@@ -48,101 +38,62 @@ async fn get_token_balance(rpc: &RpcClient, owner: &Pubkey, mint: &str) -> Resul
     Ok(token_account.amount)
 }
 
-pub async fn swap_sol_to_usdc_json(req: JsonInput) -> Result<Value> {
-    let keypair = decode_keypair(&req.private_key)?;
+pub async fn buy_token_with_sol(base58_str: &str, token_mint: &str) -> Result<()> {
+    let keypair = decode_keypair(base58_str)?;
     let pubkey = keypair.pubkey();
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
 
     let balance = rpc.get_balance(&pubkey).await?;
-    let keep = sol_to_lamports(BUFFER_SOL);
-    if balance <= keep {
-        return Err(anyhow!("Недостаточно SOL для свапа"));
+    if balance < 100_000 {
+        respond_empty(Err(anyhow!("Недостаточно SOL для покупки")));
+        return Ok(());
     }
 
-    let swap_amount = balance.saturating_sub(keep);
-    let txid = swap_directional(&keypair, SOL_MINT, USDC_MINT, swap_amount).await?;
-    Ok(json_ok(&txid))
+    let amount = balance.saturating_sub(100_000);
+    swap_directional(&keypair, SOL_MINT, token_mint, amount).await
 }
 
-pub async fn swap_usdc_to_sol_json(req: JsonInput) -> Result<Value> {
-    let keypair = decode_keypair(&req.private_key)?;
+pub async fn sell_token_for_sol(base58_str: &str, token_mint: &str) -> Result<()> {
+    let keypair = decode_keypair(base58_str)?;
     let pubkey = keypair.pubkey();
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
 
-    let amount = get_token_balance(&rpc, &pubkey, USDC_MINT).await?;
+    let amount = get_token_balance(&rpc, &pubkey, token_mint).await?;
     if amount == 0 {
-        return Err(anyhow!("Нет USDC для свапа"));
+        respond_empty(Err(anyhow!("Нет токенов для продажи")));
+        return Ok(());
     }
 
-    let txid = swap_directional(&keypair, USDC_MINT, SOL_MINT, amount).await?;
-    Ok(json_ok(&txid))
+    swap_directional(&keypair, token_mint, SOL_MINT, amount).await
 }
 
-pub async fn swap_sol_to_usdc_fixed_json(req: JsonInput) -> Result<Value> {
-    let requested = req.amount.unwrap_or(0);
-    let keypair = decode_keypair(&req.private_key)?;
-    let pubkey = keypair.pubkey();
-    let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
-
-    let balance = rpc.get_balance(&pubkey).await?;
-    let buffer = sol_to_lamports(BUFFER_SOL);
-
-    if requested > balance {
-        return Err(anyhow!("Недостаточно SOL: у вас всего {:.4} SOL", balance as f64 / 1e9));
-    }
-
-    let actual_swap_amount = requested.saturating_sub(buffer);
-    if actual_swap_amount == 0 {
-        return Err(anyhow!("Сумма слишком мала с учётом буфера ({:.4} SOL)", BUFFER_SOL));
-    }
-
-    let txid = swap_directional(&keypair, SOL_MINT, USDC_MINT, actual_swap_amount).await?;
-    Ok(json_ok(&txid))
+pub async fn buy_token_with_sol_fixed(base58_str: &str, token_mint: &str, amount: u64) -> Result<()> {
+    let keypair = decode_keypair(base58_str)?;
+    swap_directional(&keypair, SOL_MINT, token_mint, amount).await
 }
 
-pub async fn swap_usdc_to_sol_fixed_json(req: JsonInput) -> Result<Value> {
-    let amount = req.amount.unwrap_or(0);
-    if amount == 0 {
-        return Err(anyhow!("Сумма USDC для свапа должна быть больше нуля"));
-    }
-
-    let keypair = decode_keypair(&req.private_key)?;
-    let pubkey = keypair.pubkey();
-    let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
-
-    let fee = sol_to_lamports(FEE_SOL);
-    let balance = rpc.get_balance(&pubkey).await?;
-    if balance < fee {
-        return Err(anyhow!("Недостаточно SOL для комиссии (нужно минимум {} SOL)", FEE_SOL));
-    }
-
-    let actual_balance = get_token_balance(&rpc, &pubkey, USDC_MINT).await?;
-    if amount > actual_balance {
-        return Err(anyhow!("Недостаточно USDC: у вас всего {} USDC", actual_balance));
-    }
-
-    let txid = swap_directional(&keypair, USDC_MINT, SOL_MINT, amount).await?;
-    Ok(json_ok(&txid))
+pub async fn sell_token_for_sol_fixed(base58_str: &str, token_mint: &str, amount: u64) -> Result<()> {
+    let keypair = decode_keypair(base58_str)?;
+    swap_directional(&keypair, token_mint, SOL_MINT, amount).await
 }
-
 
 async fn swap_directional(
     keypair: &solana_sdk::signature::Keypair,
     input_mint: &str,
     output_mint: &str,
     amount: u64,
-) -> Result<String> {
+) -> Result<()> {
     let pubkey = keypair.pubkey();
     let client = Client::new();
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
 
     if input_mint == SOL_MINT {
-        let wsol_ata = get_associated_token_address(&pubkey, &native_mint::id());
+        let wsol_ata = get_associated_token_address(&pubkey, &spl_token::native_mint::id());
         if rpc.get_account(&wsol_ata).await.is_err() {
             let ix = create_associated_token_account(
                 &pubkey,
                 &pubkey,
-                &native_mint::id(),
+                &spl_token::native_mint::id(),
                 &token_program_id(),
             );
             let blockhash = rpc.get_latest_blockhash().await?;
@@ -169,9 +120,9 @@ async fn swap_directional(
 
     for route_plan in route_plans {
         let mut modified_quote = quote_json.clone();
-        modified_quote["routePlan"] = route_plan;
+        modified_quote["routePlan"] = route_plan.clone();
 
-        let payload = json!({
+        let payload = serde_json::json!({
             "quoteResponse": modified_quote,
             "userPublicKey": pubkey.to_string(),
             "wrapAndUnwrapSol": true,
@@ -186,12 +137,13 @@ async fn swap_directional(
             .await?;
 
         let text = swap_res.text().await?;
-        let swap_val: Value = serde_json::from_str(&text)?;
+        let swap_val: Value = match serde_json::from_str(&text) {
+            Ok(val) => val,
+            Err(_) => continue,
+        };
 
-        if let Some(err) = swap_val.get("simulationError") {
-            if !err.is_null() {
-                continue;
-            }
+        if swap_val.get("simulationError").is_some() && !swap_val["simulationError"].is_null() {
+            continue;
         }
 
         if swap_val.get("swapTransaction").is_none() {
@@ -208,14 +160,14 @@ async fn swap_directional(
             match rpc.send_transaction(&signed_tx).await {
                 Ok(sig) => {
                     let _ = rpc.confirm_transaction(&sig).await;
-                    return Ok(sig.to_string());
+                    respond_with_txid(Ok(sig.to_string()));
+                    return Ok(());
                 }
-                Err(_) => {
-                    sleep(Duration::from_secs(3)).await;
-                }
+                Err(_) => sleep(Duration::from_secs(3)).await,
             }
         }
     }
 
-    Err(anyhow!("Все маршруты свапа завершились неудачей"))
+    respond_empty(Err(anyhow!("Все маршруты свапа завершились неудачей")));
+    Ok(())
 }
