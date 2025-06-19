@@ -3,6 +3,10 @@ from typing import List, Dict, Tuple, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from spl.token.instructions import get_associated_token_address
+from solders.pubkey import Pubkey
+from solana.rpc.async_api import AsyncClient
+from bot.utils.token_info import fetch_token_info
 
 from bot.database.models import Wallet, User
 from bot.services.solana import get_wallet_balance
@@ -11,6 +15,47 @@ SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 MIN_SOL_RESERVE = 0.0032
 MIN_USDC_AMOUNT = 1.0
+
+
+async def get_token_balance(address: str, mint: str) -> int:
+    owner = Pubkey.from_string(address)
+    mint_pubkey = Pubkey.from_string(mint)
+    ata = get_associated_token_address(owner, mint_pubkey)
+
+    async with AsyncClient(SOLANA_RPC_URL) as client:
+        ata_info = await client.get_account_info(ata)
+        if ata_info.value is None:
+            return 0
+        resp = await client.get_token_account_balance(ata)
+        return int(resp.value.amount)
+
+
+async def get_token_balances_in_usdc(wallets, mint_address: str) -> dict[str, float]:
+    result = {}
+    info = await fetch_token_info(mint_address)
+    price = info["price"] if info else 0.0
+    mint = Pubkey.from_string(mint_address)
+
+    async with AsyncClient(SOLANA_RPC_URL) as client:
+        for w in wallets:
+            owner = Pubkey.from_string(w.address)
+            ata = get_associated_token_address(owner, mint)
+
+            # Сначала проверим, существует ли ATA
+            ata_info = await client.get_account_info(ata)
+            if ata_info.value is None:
+                result[str(owner)] = 0.0  # Если нет аккаунта, значит токенов нет
+                continue
+
+            # ATA существует — получаем баланс
+            resp = await client.get_token_account_balance(ata)
+            if resp.value:
+                amount = float(resp.value.ui_amount_string or "0")
+                result[str(owner)] = round(amount * price, 3)
+            else:
+                result[str(owner)] = 0.0
+
+    return result
 
 
 async def fetch_sol_price() -> float:
