@@ -4,13 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-solana-client = "1.18.3"
-solana-sdk = "1.18.3"
-bs58 = "0.4"
-base64 = "0.21"
-bincode = "1.3"
-reqwest = { version = "0.11", features = ["json"] }
+anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-anyhow = "1.0"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.37", features = ["full"] }
+bs58 = "0.5"
+base64 = "0.21"
+bincode = "1.3"
+
+# Solana stack (✅ без лишних фич)
+solana-sdk = "1.18.14"
+solana-transaction-status = "1.18.14"
+solana-client = "1.18.14"
+spl-token = "4.0.0"
+spl-associated-token-account = "2.3.0"
+reqwest = { version = "0.11", features = ["json", "gzip", "stream"] }
