@@ -23,7 +23,9 @@ from bot.services.rust_swap import (
     swap_fixed_usdc_to_sol,
 )
 from bot.states.swap_states import SwapState
+import logging
 
+logger = logging.getLogger(__name__)
 swap_router = Router()
 
 
@@ -85,34 +87,45 @@ async def handle_swap_all_sol_usdc(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     selected_addresses = user_selected_wallets.get(telegram_id, set())
 
+    logger.info(f"[SOL→USDC] User {telegram_id} initiated swap for wallets: {selected_addresses}")
+
     async with async_session() as session:
         user = await get_user_with_wallets(telegram_id, session)
         if not user:
+            logger.warning(f"[SOL→USDC] User {telegram_id} not found in DB.")
             await callback.message.answer("❌ User not found.")
             return
 
         selected_wallets = [w for w in user.wallets if w.address in selected_addresses]
         if not selected_wallets:
+            logger.warning(f"[SOL→USDC] No matching wallets for user {telegram_id}.")
             await callback.message.answer("❗ No wallets selected.")
             return
 
-        success, failed = [], []
+        success = []
+        failed = []
 
         for wallet in selected_wallets:
+            logger.info(f"[SOL→USDC] Checking swap possibility for {wallet.address}")
             ok, reason, sol = await check_sol_swap_possibility(wallet.address)
             if not ok:
+                logger.warning(f"[SOL→USDC] Swap not possible for {wallet.address}: {reason}")
                 failed.append((wallet.address, reason))
                 continue
 
             try:
                 lamports = int(sol * 1_000_000_000)
                 keypair = Keypair.from_bytes(base58.b58decode(decrypt_seed(wallet.encrypted_seed)))
+                logger.info(f"[SOL→USDC] Attempting swap for {wallet.address} with {lamports} lamports")
                 txid = await swap_all_sol_to_usdc(keypair, lamports)
                 if txid and txid != "null":
+                    logger.info(f"[SOL→USDC] Swap success for {wallet.address} → {txid}")
                     success.append((wallet.address, txid))
                 else:
+                    logger.error(f"[SOL→USDC] Swap failed: No route for {wallet.address}")
                     failed.append((wallet.address, "Маршрут не найден, попробуйте позже."))
-            except:
+            except Exception as e:
+                logger.exception(f"[SOL→USDC] Exception during swap for {wallet.address}: {e}")
                 failed.append((wallet.address, "Swap failed. Please try again."))
 
         await send_swap_result(callback, success, failed)
@@ -125,33 +138,44 @@ async def handle_swap_all_usdc_sol(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     selected_addresses = user_selected_wallets.get(telegram_id, set())
 
+    logger.info(f"[USDC→SOL] User {telegram_id} initiated swap for wallets: {selected_addresses}")
+
     async with async_session() as session:
         user = await get_user_with_wallets(telegram_id, session)
         if not user:
+            logger.warning(f"[USDC→SOL] User {telegram_id} not found in DB.")
             await callback.message.answer("❌ User not found.")
             return
 
         selected_wallets = [w for w in user.wallets if w.address in selected_addresses]
         if not selected_wallets:
+            logger.warning(f"[USDC→SOL] No matching wallets for user {telegram_id}.")
             await callback.message.answer("❗ No wallets selected.")
             return
 
-        success, failed = [], []
+        success = []
+        failed = []
 
         for wallet in selected_wallets:
+            logger.info(f"[USDC→SOL] Checking swap possibility for {wallet.address}")
             ok, reason, _, _ = await check_usdc_swap_possibility(wallet.address)
             if not ok:
+                logger.warning(f"[USDC→SOL] Swap not possible for {wallet.address}: {reason}")
                 failed.append((wallet.address, reason))
                 continue
 
             try:
                 keypair = Keypair.from_bytes(base58.b58decode(decrypt_seed(wallet.encrypted_seed)))
+                logger.info(f"[USDC→SOL] Attempting swap for {wallet.address}")
                 txid = await swap_all_usdc_to_sol(keypair)
                 if txid and txid != "null":
+                    logger.info(f"[USDC→SOL] Swap success for {wallet.address} → {txid}")
                     success.append((wallet.address, txid))
                 else:
+                    logger.error(f"[USDC→SOL] Swap failed: No route for {wallet.address}")
                     failed.append((wallet.address, "Маршрут не найден, попробуйте позже."))
-            except:
+            except Exception as e:
+                logger.exception(f"[USDC→SOL] Exception during swap for {wallet.address}: {e}")
                 failed.append((wallet.address, "Swap failed. Please try again."))
 
         await send_swap_result(callback, success, failed)
@@ -174,47 +198,71 @@ async def process_fixed_sol_to_usdc(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     selected_addresses = user_selected_wallets.get(telegram_id, set())
 
+    logger.info(f"[FIXED SOL→USDC] (1) User {telegram_id} entered amount: {message.text}")
+    logger.info(f"[FIXED SOL→USDC] (2) Selected wallets: {selected_addresses}")
+
     try:
         amount = float(message.text.strip().replace(",", "."))
         if amount <= 0:
             raise ValueError
     except ValueError:
+        logger.warning(f"[FIXED SOL→USDC] (3) Invalid amount entered: {message.text}")
         await message.answer("❌ Введите корректное число больше нуля.")
         return
 
     await message.answer("⏳ Выполняем свап SOL → USDC. Пожалуйста, подождите...")
 
-
     async with async_session() as session:
         user = await get_user_with_wallets(telegram_id, session)
         if not user:
+            logger.warning(f"[FIXED SOL→USDC] (4) User {telegram_id} not found in DB.")
             await message.answer("❌ User not found.")
             return
 
         selected_wallets = [w for w in user.wallets if w.address in selected_addresses]
         if not selected_wallets:
+            logger.warning(f"[FIXED SOL→USDC] (5) No matching wallets for user {telegram_id}.")
             await message.answer("❗ No wallets selected.")
             return
 
-        success, failed = [], []
+        success = []
+        failed = []
 
         for wallet in selected_wallets:
+            logger.info(f"[FIXED SOL→USDC] (6) Checking {wallet.address} for swap possibility.")
             ok, reason, sol_balance = await check_sol_swap_possibility(wallet.address)
-            if sol_balance < amount + 0.0032:
-                failed.append((wallet.address, f"Недостаточно SOL (нужно минимум {amount + 0.0032:.4f})"))
+            logger.info(f"[FIXED SOL→USDC] (7) Balance: {sol_balance:.6f} SOL | Needed: {amount}")
+
+            if sol_balance < amount:
+                logger.warning(f"[FIXED SOL→USDC] (8) Not enough SOL: {sol_balance:.4f} < {amount}")
+                failed.append((wallet.address, f"Недостаточно SOL (доступно {sol_balance:.4f})"))
                 continue
 
             try:
                 lamports = int(amount * 1_000_000_000)
-                keypair = Keypair.from_bytes(base58.b58decode(decrypt_seed(wallet.encrypted_seed)))
+                logger.info(f"[FIXED SOL→USDC] (9) Swapping {lamports} lamports for {wallet.address}")
+
+                decrypted = decrypt_seed(wallet.encrypted_seed)
+                logger.debug(f"[FIXED SOL→USDC] (10) Decrypted seed (base58, shortened): {decrypted[:6]}...")
+
+                keypair = Keypair.from_bytes(base58.b58decode(decrypted))
+
+                logger.info(f"[FIXED SOL→USDC] (11) Calling swap_fixed_sol_to_usdc()...")
                 txid = await swap_fixed_sol_to_usdc(keypair, lamports)
+
+                logger.info(f"[FIXED SOL→USDC] (12) TXID returned: {txid}")
                 if txid and txid != "null":
+                    logger.info(f"[FIXED SOL→USDC] (13) SUCCESS: {wallet.address} → {txid}")
                     success.append((wallet.address, txid))
                 else:
+                    logger.error(f"[FIXED SOL→USDC] (14) FAIL: No route for {wallet.address}")
                     failed.append((wallet.address, "Маршрут не найден, попробуйте позже."))
-            except:
+
+            except Exception as e:
+                logger.exception(f"[FIXED SOL→USDC] (15) Exception for {wallet.address}: {e}")
                 failed.append((wallet.address, "Swap failed. Please try again."))
 
+        logger.info(f"[FIXED SOL→USDC] (16) Finished. Success: {len(success)} | Failed: {len(failed)}")
         await send_swap_result(message, success, failed)
         await state.clear()
 
@@ -223,6 +271,8 @@ async def process_fixed_sol_to_usdc(message: Message, state: FSMContext):
 async def process_fixed_usdc_to_sol(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     selected_addresses = user_selected_wallets.get(telegram_id, set())
+
+    logger.info(f"[FIXED USDC→SOL] User {telegram_id} entered amount: {message.text}")
 
     try:
         amount = float(message.text.strip().replace(",", "."))
@@ -237,38 +287,44 @@ async def process_fixed_usdc_to_sol(message: Message, state: FSMContext):
     async with async_session() as session:
         user = await get_user_with_wallets(telegram_id, session)
         if not user:
+            logger.warning(f"[FIXED USDC→SOL] User {telegram_id} not found in DB.")
             await message.answer("❌ User not found.")
             return
 
         selected_wallets = [w for w in user.wallets if w.address in selected_addresses]
         if not selected_wallets:
+            logger.warning(f"[FIXED USDC→SOL] No matching wallets for user {telegram_id}.")
             await message.answer("❗ No wallets selected.")
             return
 
-        success, failed = [], []
+        success = []
+        failed = []
 
         for wallet in selected_wallets:
-            _, _, sol_balance, usdc_balance = await check_usdc_swap_possibility(wallet.address)
+            _, _, _, usdc_balance = await check_usdc_swap_possibility(wallet.address)
             if usdc_balance < amount:
+                logger.warning(f"[FIXED USDC→SOL] Not enough USDC on {wallet.address} ({usdc_balance:.2f} < {amount})")
                 failed.append((wallet.address, f"Недостаточно USDC (нужно минимум {amount:.2f})"))
-                continue
-            if sol_balance < 0.0032:
-                failed.append((wallet.address, "Недостаточно SOL для оплаты комиссии (минимум 0.0032)"))
                 continue
 
             try:
                 usdc_amount = int(amount * 10**6)
                 keypair = Keypair.from_bytes(base58.b58decode(decrypt_seed(wallet.encrypted_seed)))
+                logger.info(f"[FIXED USDC→SOL] Swapping {amount} USDC for {wallet.address}")
                 txid = await swap_fixed_usdc_to_sol(keypair, usdc_amount)
                 if txid and txid != "null":
+                    logger.info(f"[FIXED USDC→SOL] Success for {wallet.address} → {txid}")
                     success.append((wallet.address, txid))
                 else:
+                    logger.error(f"[FIXED USDC→SOL] No route for {wallet.address}")
                     failed.append((wallet.address, "Маршрут не найден, попробуйте позже."))
-            except:
+            except Exception as e:
+                logger.exception(f"[FIXED USDC→SOL] Exception during swap for {wallet.address}: {e}")
                 failed.append((wallet.address, "Swap failed. Please try again."))
 
         await send_swap_result(message, success, failed)
         await state.clear()
+
 
 
 async def send_swap_result(message_or_cb, success: list, failed: list):
