@@ -6,6 +6,7 @@ from datetime import datetime
 import inspect
 
 from bot.services.rust_swap import buy_sell_token_from_wallets
+from bot.services.solana import get_wallet_balance
 from bot.states.buy_sell import BuySellStates
 from bot.utils.token_info import fetch_token_info, format_token_info_message
 from bot.utils.common import go_back_to_main_menu
@@ -22,40 +23,83 @@ router = Router(name="buy_sell")
 
 
 def get_buy_amount_in_lamports(value: str) -> int:
-    sol_amount = float(value)
-    return int(sol_amount * 1_000_000_000)
+    try:
+        sol_amount = float(value.replace(",", "."))
+        if sol_amount <= 0:
+            return 0
+        return int(sol_amount * 1_000_000_000)
+    except Exception:
+        return 0
 
 
 async def get_sell_amount(wallet_address: str, token_mint: str, percent: int) -> int:
-    token_balance = await get_token_balance(wallet_address, token_mint)
-    return int(token_balance * percent / 100)
+    try:
+        token_balance = await get_token_balance(wallet_address, token_mint)
+        return int(token_balance * percent / 100)
+    except Exception:
+        return 0
 
 
 async def run_buy_sell(source, ca: str, mode: str, wallets: list, get_amount_fn):
+    from bot.utils.value_data import check_sol_swap_possibility, check_token_balance_for_sell
+
+    print(f"🔁 START run_buy_sell | MODE: {mode} | CA: {ca} | Wallets: {[w.address for w in wallets]}")
     success = []
     failed = {}
 
     for w in wallets:
         try:
-            # Универсальный вызов
+            print(f"➡️  Wallet: {w.address}")
             amount = await get_amount_fn(w) if inspect.iscoroutinefunction(get_amount_fn) else get_amount_fn(w)
+            print(f"📦 Amount to {mode}: {amount}")
 
             if not isinstance(amount, int) or amount <= 0:
-                failed[w.address] = f"Invalid amount: {amount}"
+                failed[w.address] = f"❌ Invalid amount: {amount}"
                 continue
+
+            if mode == "buy":
+                ok, err, sol_balance = await check_sol_swap_possibility(w.address)
+                sol_balance_lamports = int(sol_balance * 1_000_000_000)
+                print(f"💰 SOL Balance Check: OK={ok}, Error={err}, Balance={sol_balance:.9f} SOL")
+
+                if not ok:
+                    failed[w.address] = err
+                    continue
+
+                if sol_balance_lamports < amount:
+                    failed[w.address] = (
+                        f"❌ Not enough SOL: need {amount / 1e9:.4f}, available {sol_balance:.4f}"
+                    )
+                    continue
+
+            else:  # mode == "sell"
+                ok, err, token_balance = await check_token_balance_for_sell(w.address, ca)
+                print(f"🪙 Token Balance Check: OK={ok}, Error={err}, Balance={token_balance / 1e6}")
+                if not ok:
+                    failed[w.address] = err
+                    continue
+                if token_balance < amount:
+                    failed[w.address] = (
+                        f"❌ Not enough tokens: need {amount / 1e6:.2f}, available {token_balance / 1e6:.2f}"
+                    )
+                    continue
 
             result = await buy_sell_token_from_wallets([w], ca, mode, amount)
 
             if result and isinstance(result, tuple) and result[0]:
                 txid = result[0][0][1]
+                print(f"✅ TX Success: {txid}")
                 success.append((w.address, txid))
             else:
-                error = list(result[1].values())[0] if result and result[1] else "Unknown error"
+                error = list(result[1].values())[0] if result and result[1] else "❌ Transaction failed"
+                print(f"❌ TX Error: {error}")
                 failed[w.address] = error
 
         except Exception as e:
-            failed[w.address] = str(e)
+            print(f"❌ Exception: {e}")
+            failed[w.address] = f"❌ Internal error: {str(e)}"
 
+    print(f"✅ FINISH run_buy_sell: Success={len(success)} | Failed={len(failed)}")
     await send_buy_sell_result(source, success, failed)
 
 
@@ -150,13 +194,7 @@ async def handle_custom_buy_amount(message: Message, state: FSMContext):
 
     async def get_amount(_): return int(value * 1_000_000_000)
 
-    await run_buy_sell(
-        message,
-        ca,
-        "buy",
-        selected_wallets,
-        get_amount
-    )
+    await run_buy_sell(message, ca, "buy", selected_wallets, get_amount)
 
     await state.set_state(BuySellStates.choosing_mode)
     components = await get_token_ui_components(user.wallets, ca, "buy", wallet_addrs)
@@ -186,21 +224,14 @@ async def handle_custom_sell_percent(message: Message, state: FSMContext):
     async def get_amount(w):
         return await get_sell_amount(w.address, ca, percent)
 
-    await run_buy_sell(
-        message,
-        ca,
-        "sell",
-        selected_wallets,
-        get_amount
-    )
+    await run_buy_sell(message, ca, "sell", selected_wallets, get_amount)
 
     await state.set_state(BuySellStates.choosing_mode)
     components = await get_token_ui_components(user.wallets, ca, "sell", wallet_addrs)
     await send_token_ui(message, *components)
 
 
-@router.callback_query(lambda c: (
-    c.data.startswith("buy:") or c.data.startswith("sell:")) and ":custom" not in c.data)
+@router.callback_query(lambda c: (c.data.startswith("buy:") or c.data.startswith("sell:")) and ":custom" not in c.data)
 async def handle_amount_selection(callback: CallbackQuery, state: FSMContext):
     try:
         action, value, ca = callback.data.split(":", 2)
@@ -225,22 +256,18 @@ async def handle_amount_selection(callback: CallbackQuery, state: FSMContext):
             user = await get_user_with_wallets(callback.from_user.id, session)
         selected_wallets = [w for w in user.wallets if w.address in wallet_addrs]
 
-        # ✅ Асинхронная функция получения суммы
         if mode == "buy":
-            async def get_amount(_): return get_buy_amount_in_lamports(value)
-        else:
-            async def get_amount(w): return await get_sell_amount(w.address, ca, int(value))
+            lamports = get_buy_amount_in_lamports(value)
 
-        await run_buy_sell(
-            callback,
-            ca,
-            mode,
-            selected_wallets,
-            get_amount
-        )
+            async def get_amount(_): return lamports
+        else:
+            percent = int(value)
+
+            async def get_amount(w): return await get_sell_amount(w.address, ca, percent)
+
+        await run_buy_sell(callback, ca, mode, selected_wallets, get_amount)
 
         await state.update_data(selected_wallets=list(wallet_addrs))
-
         components = await get_token_ui_components(user.wallets, ca, mode, wallet_addrs)
         await send_token_ui(callback.message, *components)
 
@@ -266,16 +293,20 @@ async def handle_custom_amount_request(callback: CallbackQuery, state: FSMContex
 
 
 async def send_buy_sell_result(message_or_cb, success: list, failed: dict):
-    text = ""
+    lines = []
+
     if success:
-        text += "<b>✅Success:</b>\n"
+        lines.append("<b>✅ Успешные транзакции:</b>")
         for addr, tx in success:
-            text += f"• <code>{addr[:6]}...{addr[-4:]}</code> → <a href='https://solscan.io/tx/{tx}'>tx</a>\n"
+            lines.append(f"• <code>{addr[:6]}...{addr[-4:]}</code> → <a href='https://solscan.io/tx/{tx}'>tx</a>")
+
     if failed:
-        text += "\n<b>❌Failed:</b>\n"
+        lines.append("\n<b>❌ Ошибки:</b>")
         for addr, err in failed.items():
-            text += f"• <code>{addr[:6]}...{addr[-4:]}</code> → {err}\n"
-    text = text or "❌ Operation failed."
+            err_text = str(err).strip().replace("<", "").replace(">", "")
+            lines.append(f"• <code>{addr[:6]}...{addr[-4:]}</code> → {err_text}")
+
+    text = "\n".join(lines) if lines else "❌ Операция не удалась."
 
     if isinstance(message_or_cb, Message):
         await message_or_cb.answer(text, parse_mode="HTML", disable_web_page_preview=True)
@@ -283,7 +314,6 @@ async def send_buy_sell_result(message_or_cb, success: list, failed: dict):
         await message_or_cb.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
-@router.callback_query(F.data == "confirm_buy_sell")
 async def handle_confirm_buy_sell(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     ca = data.get("token_ca")
@@ -291,25 +321,25 @@ async def handle_confirm_buy_sell(callback: CallbackQuery, state: FSMContext):
     wallets = data.get("selected_wallets", [])
 
     if not wallets:
-        await callback.answer("❗ Выберите хотя бы один кошелек.")
+        await callback.answer("❗ Select at least one wallet.")
         return
 
-    await callback.answer("⏳ Выполняется операция...", show_alert=True)
+    await callback.answer("⏳ Processing...", show_alert=True)
 
     async with async_session() as session:
         user = await get_user_with_wallets(callback.from_user.id, session)
     selected_wallets = [w for w in user.wallets if w.address in wallets]
 
-    await run_buy_sell(
-        callback,
-        ca,
-        mode,
-        selected_wallets,
-        lambda w: get_token_balance(w.address, ca) if mode == "sell" else 1_000_000_000  # fallback
-    )
+    async def get_amount(w):
+        if mode == "buy":
+            sol = await get_wallet_balance(w.address)
+            return int(sol * 1_000_000_000)  # no buffer — Rust will handle
+        else:
+            return await get_token_balance(w.address, ca)
+
+    await run_buy_sell(callback, ca, mode, selected_wallets, get_amount)
 
     await state.set_state(BuySellStates.choosing_mode)
-
     components = await get_token_ui_components(user.wallets, ca, mode, set(wallets))
     await send_token_ui(callback.message, *components)
 
