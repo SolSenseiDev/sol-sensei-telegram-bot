@@ -69,7 +69,25 @@ pub async fn sell_token_for_sol(base58_str: &str, token_mint: &str) -> Result<()
 
 pub async fn buy_token_with_sol_fixed(base58_str: &str, token_mint: &str, amount: u64) -> Result<()> {
     let keypair = decode_keypair(base58_str)?;
-    swap_directional(&keypair, SOL_MINT, token_mint, amount).await
+    let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
+    let pubkey = keypair.pubkey();
+
+    // Получим баланс кошелька
+    let balance = rpc.get_balance(&pubkey).await?;
+    let buffer = 4_500_000; // 0.0045 SOL
+
+    if balance <= buffer {
+        respond_empty(Err(anyhow!("Insufficient SOL balance (buffer exceeded)")));
+        return Ok(());
+    }
+
+    let safe_amount = amount.min(balance - buffer);
+    if safe_amount == 0 {
+        respond_empty(Err(anyhow!("Insufficient SOL after buffer deduction")));
+        return Ok(());
+    }
+
+    swap_directional(&keypair, SOL_MINT, token_mint, safe_amount).await
 }
 
 pub async fn sell_token_for_sol_fixed(base58_str: &str, token_mint: &str, amount: u64) -> Result<()> {
