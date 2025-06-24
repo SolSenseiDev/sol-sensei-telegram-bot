@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="![Uploading Gitsshub.png…]()" alt="SolSensei Logo" width="300"/>
+  <img src="https://github.com/user-attachments/assets/5528887b-e984-4e87-b58c-578b2742a91c" alt="SolSensei Banner" width="100%"/>
 </p>
 
 # 🚀 SolSensei — Your Guide in the Solana Ecosystem
