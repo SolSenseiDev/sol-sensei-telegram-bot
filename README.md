@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="![Uploading Gitsshub.png…]()" alt="SolSensei Logo" width="300"/>
+</p>
+
 # 🚀 SolSensei — Your Guide in the Solana Ecosystem
 
 **SolSensei** is a next-generation Telegram bot for automated trading, token analysis, and portfolio management in the **Solana** network.  
