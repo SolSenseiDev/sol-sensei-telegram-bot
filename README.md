@@ -1,83 +1,100 @@
-# 🚀 SolSensei – Your Guide in the Solana Ecosystem
+# 🚀 SolSensei — Your Guide in the Solana Ecosystem
 
-**SolSensei** is a modular Telegram-based platform for automating token trading in the **Solana** network.  
-The bot provides powerful tools for multi-wallet trading, contract analysis, portfolio tracking, and secure interaction with decentralized protocols. The architecture is built on modern asynchronous Python frameworks with a focus on performance and scalability.
-
----
-
-## 🔥 Features
-
-- ✅ **Token Scanner**: contract analysis, market cap, volume, holder count, links to DEX Screener  
-- 💼 **Portfolio Tracking**: view balances and positions across connected wallets  
-- 💱 **Buy/Sell Tokens**: execute token swaps from one or multiple wallets simultaneously  
-- 🔁 **Trading Strategies**: DCA support, batch selling, and predefined strategy templates  
-- 🔐 **Non-custodial**: private keys stay on the user's side; all transactions are signed locally  
-- ⚡ **Optimized RPC Layer**: integrated with an official Solana RPC provider
+**SolSensei** is a next-generation Telegram bot for automated trading, token analysis, and portfolio management in the **Solana** network.  
+Built with modern asynchronous Python and high-performance Rust integration. Secure, private, and scalable.
 
 ---
 
-## 🏗 Technologies Used
+## 🧩 Features
 
-SolSensei is built using modern Python tooling and reliable server infrastructure:
-
-### Language & Frameworks:
-- `Python 3.11+`
-- `aiogram v3` — async Telegram framework  
-- `asyncio`, `aiohttp`, `httpx` — asynchronous request handling  
-- `websockets` — real-time data streams  
-- `FastAPI`, `uvicorn` — internal APIs  
-- `Jinja2`, `markdown2` — templating engine
-
-### Blockchain Integration:
-- `Jupiter Aggregator API` — token swaps  
-- `Solana RPC` — official RPC provider  
-- `Solscan`, `SolanaFM`, `Tensor API` — metadata and transaction history  
-- `solana-py`, `base58`, `borsh`, `construct` — low-level Solana interactions
-
-### Data Storage:
-- `PostgreSQL` — main database  
-- `SQLAlchemy`, `asyncpg` — ORM and DB drivers  
-- `Redis` — caching, pub/sub, task queues
-
-### Security:
-- `dotenv` — environment configuration  
-- `cryptography`, `hashlib`, `secrets` — secure key handling  
-- `ratelimit`, `slowapi` — anti-spam and rate limiting
-
-### Deployment:
-- `Docker`, `docker-compose` — containerization  
-- `Railway.app`, `Render`, `UptimeRobot` — hosting and monitoring
+### 📍 Overview  
+SolSensei combines powerful trading and analysis tools in a simple Telegram interface.  
+Suitable for both beginners and advanced traders.
 
 ---
 
-## 🎁 Refer-to-Earn Airdrop System
+### 🔍 Token Scanner
+- Contract address (CA) lookup  
+- Price, market cap, liquidity, volume  
 
-SolSensei implements a referral-based airdrop system to reward active users and promote community growth.
+---
 
-### 🔗 How it works:
+### 💼 Portfolio Tracker
+- Multi-wallet support  
+- Balances in SOL, USDC, and custom tokens  
+- Real-time portfolio valuation  
 
-- Each user gets a **unique referral link**  
-- New users who join via your link and remain active will earn you points  
-- Points accumulate and convert into **airdrop allocations**  
-- Top referrers gain access to new features, beta modules, and exclusive bonuses
+---
 
-### 🪂 Eligibility:
+### 🔐 Security & Privacy
+- Private keys are stored **only on the user's side**  
+- Transactions are signed locally  
+- Support for **multiple fallback RPC providers**  
+- Spam and rate-limit protection (`ratelimit`, `slowapi`)
 
-- Regular use of SolSensei tools  
-- Connected and active wallets  
-- Referral activity  
-- Participation in testing and feedback
+---
 
-> 📢 Launch dates, reward structure, and rules will be announced in the Telegram channel.
+### ⚙️ Advanced Features
+- Instant swaps via **Jupiter Aggregator v6**  
+- Automatic creation and validation of **ATA** (Associated Token Accounts)  
+- Mass withdrawal from multiple wallets to a single address  
+- Integration with a **Rust binary** for high-speed execution  
+
+---
+
+### 🦀 Why Rust
+- 🔥 Maximum performance and safety  
+- 🧩 Full compatibility with `solana-sdk`  
+- 📉 Minimal overhead for mass wallet operations  
+
+---
+
+## 📚 Tech Stack
+
+### 📦 Languages & Frameworks (Python)
+- `Python 3.11+`, `aiogram v3`, `FastAPI`  
+- `asyncpg`, `SQLAlchemy 2.x`, `Redis`  
+- `httpx`, `aiohttp`, `websockets`  
+
+### 🧠 Blockchain & Crypto Libraries (Python)
+- `solders`, `solana-py`, `borsh`, `construct`  
+- `cryptography`, `secrets`, `ratelimit`  
+
+### 🦀 Languages & Frameworks (Rust)  
+- `solana-sdk`, `solana-client`, `spl-token`, `spl-associated-token-account`  
+- `serde`, `serde_json`, `bincode`, `bs58`, `base64`  
+- `tokio`, `reqwest`, `anyhow`  
+
+### 🐳 Infrastructure & Deployment
+- `Docker`, `docker-compose`  
+- Railway, Render, UptimeRobot  
+
+---
+
+## 🪂 Referral System & Airdrop
+
+SolSensei rewards active users through its built-in referral program:
+
+- 🧾 Unique invite link for each user  
+- 🎯 Earn points for every active referral  
+- 🎁 Points convert into airdrops  
+- ✅ Requirements: active bot usage, connected wallets, testing participation  
+
+> 📢 Details about the airdrop and launch date will be announced in our Telegram channel.
 
 ---
 
 ## 📬 Contact
 
-- Telegram Bot: [@SolSenseiBot](https://t.me/SolSenseiBot)  
-- Twitter: [@SolSensei](https://twitter.com/SolSensei)  
-- Email: [solsenseibot@gmail.com](mailto:solsenseibot@gmail.com)
+- 🤖 Bot: [@SolSenseiBot](https://t.me/SolSenseiBot)  
+- 🐦 Twitter: [@SolSensei](https://twitter.com/SolSensei)  
+- 📧 Email: [solsenseibot@gmail.com](mailto:solsenseibot@gmail.com)
 
 ---
 
-> 🧘 SolSensei is more than just a bot — it’s your reliable tool in the Solana world.
+## 🧘 About the Project
+
+SolSensei is more than a bot — it’s your personal sensei in the world of Solana.  
+The project is actively evolving and open to feedback, contributions, and collaboration.
+
+> © 2025 SolSensei. Built with ❤️ on Solana.
