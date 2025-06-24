@@ -92,7 +92,7 @@ SolSensei rewards active users through its built-in referral program:
 
 - 🤖 Bot: [@SolSenseiBot](https://t.me/SolSenseiBot)  
 - 🐦 Twitter: [@SolSensei](https://x.com/SolSenseiBot)  
-- 📧 Email: [solsenseibot@gmail.com](mailto:solsenseibot@gmail.com)
+- 📧 Email: [solsenseidev@gmail.com](mailto:solsenseidev@gmail.com)
 
 ---
 
