@@ -71,7 +71,6 @@ Suitable for both beginners and advanced traders.
 
 ### 🐳 Infrastructure & Deployment
 - `Docker`, `docker-compose`  
-- Railway, Render, UptimeRobot  
 
 ---
 
