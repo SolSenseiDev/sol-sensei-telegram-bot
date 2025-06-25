@@ -1,4 +1,4 @@
-# SolSensei — Your Guide in the Solana Ecosystem
+<h1 align="center">🚀 SolSensei — Your Guide in the Solana Ecosystem</h1>
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/5528887b-e984-4e87-b58c-578b2742a91c" alt="SolSensei Banner" width="100%"/>
