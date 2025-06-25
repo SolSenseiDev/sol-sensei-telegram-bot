@@ -1,9 +1,7 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/4a3d0f7d-87e3-4407-8044-1df6d092dc28" alt="SolSensei Logo" width="80"/>
+  <img src="https://github.com/user-attachments/assets/4a3d0f7d-87e3-4407-8044-1df6d092dc28" alt="SolSensei Logo" width="48" style="display:inline-block; vertical-align:middle;">
+  <strong style="font-size: 32px; vertical-align: middle;">&nbsp;SolSensei — Your Guide in the Solana Ecosystem</strong>
 </p>
-
-<h1 align="center">SolSensei — Your Guide in the Solana Ecosystem</h1>
-
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/5528887b-e984-4e87-b58c-578b2742a91c" alt="SolSensei Banner" width="100%"/>
