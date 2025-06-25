@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/4a3d0f7d-87e3-4407-8044-1df6d092dc28" alt="SolSensei Logo" width="64"/>
-</p>
-
 <h1 align="center">SolSensei — Your Guide in the Solana Ecosystem</h1>
 
 <p align="center">
