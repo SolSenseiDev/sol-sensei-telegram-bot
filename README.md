@@ -1,6 +1,5 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/4a3d0f7d-87e3-4407-8044-1df6d092dc28" alt="SolSensei Logo" width="48" style="display:inline-block; vertical-align:middle;">
-  <strong style="font-size: 32px; vertical-align: middle;">&nbsp;SolSensei — Your Guide in the Solana Ecosystem</strong>
+  <img src="https://raw.githubusercontent.com/user-attachments/assets/f8ea659d-bb99-4cce-a57d-db7546e00972.png" alt="SolSensei Title" width="100%"/>
 </p>
 
 <p align="center">
