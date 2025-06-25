@@ -9,13 +9,6 @@ DATABASE_URL = (
     f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
 )
 
-print("🔍 POSTGRES_USER:", os.getenv('POSTGRES_USER'))
-print("🔍 POSTGRES_PASSWORD:", os.getenv('POSTGRES_PASSWORD'))
-print("🔍 POSTGRES_HOST:", os.getenv('POSTGRES_HOST'))
-print("🔍 POSTGRES_PORT:", os.getenv('POSTGRES_PORT'))
-print("🔍 POSTGRES_DB:", os.getenv('POSTGRES_DB'))
-print("🔍 DATABASE_URL:", DATABASE_URL)
-
 engine = create_async_engine(DATABASE_URL)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 Base = declarative_base()
