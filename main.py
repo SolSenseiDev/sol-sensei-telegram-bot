@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -15,22 +16,28 @@ from bot.handlers.start import start_router
 from bot.handlers.wallets import wallets_router
 from bot.handlers.swap import swap_router
 
-# 🔧 Import Rust build logic
-from manage_rust import build_rust
+from manage_rust import build_rust, OUTPUT_BIN
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 
 async def main():
+    # 👷 Build Rust
+    build_rust()
+
+    # 🌐 Run Rust server (non-blocking)
+    print("🌐 Starting Rust Axum server on localhost:3030...")
+    rust_proc = subprocess.Popen([OUTPUT_BIN], cwd="bin")
+
+    # 🤖 Launch the bot
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
-    storage = MemoryStorage()  # Initialize FSM storage
-    dp = Dispatcher(storage=storage)  # Pass storage to dispatcher
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
 
-    # Include all routers
     dp.include_router(start_router)
     dp.include_router(wallets_router)
     dp.include_router(swap_router)
@@ -41,11 +48,12 @@ async def main():
     dp.include_router(withdraw_router)
 
     print("🤖 Bot is running...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        print("🛑 Shutting down Rust server...")
+        rust_proc.terminate()
+
 
 if __name__ == "__main__":
-    # 🛠️ Build Rust before starting
-    build_rust()
-
-    # 🚀 Run the bot
     asyncio.run(main())

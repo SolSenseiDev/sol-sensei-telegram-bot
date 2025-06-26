@@ -19,26 +19,14 @@ def build_rust():
     print(f"✅ Rust binary copied to: {OUTPUT_BIN}")
 
 
-def run_rust(mode=None):
-    print("🚀 Running Rust binary...")
-    args = [OUTPUT_BIN]
-    if mode:
-        args.append(mode)
-    proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # 🔑 Example only: insert private key here for testing
-    privkey = "3ENJ5..."  # <-- temporary test value
-
-    stdout, stderr = proc.communicate(input=privkey.encode())
-    print("📤 Output:\n", stdout.decode())
-    if stderr:
-        print("⚠️ Stderr:\n", stderr.decode())
+def run_server():
+    print("🌐 Starting Rust Axum server on localhost:3030...")
+    subprocess.run([OUTPUT_BIN], cwd="bin")
 
 
 if __name__ == "__main__":
-    mode = None
-    if len(sys.argv) >= 3 and sys.argv[1] == "--run":
-        mode = sys.argv[2]
-    build_rust()
-    if mode:
-        run_rust(mode)
+    if "--run" in sys.argv:
+        build_rust()
+        run_server()
+    else:
+        build_rust()
