@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use reqwest::Client;
-use serde::{Deserialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
@@ -33,13 +33,6 @@ struct SwapResponse {
     swap_transaction: String,
 }
 
-fn json_ok(txid: &str) -> Value {
-    json!({
-        "success": true,
-        "txid": txid
-    })
-}
-
 async fn get_token_balance(rpc: &RpcClient, owner: &Pubkey, mint: &str) -> Result<u64> {
     let mint_pubkey = Pubkey::from_str(mint)?;
     let ata = get_associated_token_address(owner, &mint_pubkey);
@@ -56,12 +49,11 @@ pub async fn swap_sol_to_usdc_json(req: JsonInput) -> Result<Value> {
     let balance = rpc.get_balance(&pubkey).await?;
     let keep = sol_to_lamports(BUFFER_SOL);
     if balance <= keep {
-        return Err(anyhow!("Not enough SOL for swap"));
+        return Ok(json!({ "success": false, "error": "Not enough SOL for swap" }));
     }
 
     let swap_amount = balance.saturating_sub(keep);
-    let txid = swap_directional(&keypair, SOL_MINT, USDC_MINT, swap_amount).await?;
-    Ok(json_ok(&txid))
+    swap_directional(&keypair, SOL_MINT, USDC_MINT, swap_amount).await
 }
 
 pub async fn swap_usdc_to_sol_json(req: JsonInput) -> Result<Value> {
@@ -71,11 +63,10 @@ pub async fn swap_usdc_to_sol_json(req: JsonInput) -> Result<Value> {
 
     let amount = get_token_balance(&rpc, &pubkey, USDC_MINT).await?;
     if amount == 0 {
-        return Err(anyhow!("No USDC to swap"));
+        return Ok(json!({ "success": false, "error": "No USDC to swap" }));
     }
 
-    let txid = swap_directional(&keypair, USDC_MINT, SOL_MINT, amount).await?;
-    Ok(json_ok(&txid))
+    swap_directional(&keypair, USDC_MINT, SOL_MINT, amount).await
 }
 
 pub async fn swap_sol_to_usdc_fixed_json(req: JsonInput) -> Result<Value> {
@@ -88,22 +79,27 @@ pub async fn swap_sol_to_usdc_fixed_json(req: JsonInput) -> Result<Value> {
     let buffer = sol_to_lamports(BUFFER_SOL);
 
     if requested > balance {
-        return Err(anyhow!("Insufficient SOL: you only have {:.4} SOL", balance as f64 / 1e9));
+        return Ok(json!({
+            "success": false,
+            "error": format!("Insufficient SOL: you only have {:.4} SOL", balance as f64 / 1e9)
+        }));
     }
 
     let actual_swap_amount = requested.saturating_sub(buffer);
     if actual_swap_amount == 0 {
-        return Err(anyhow!("Amount too small after buffer deduction ({:.4} SOL)", BUFFER_SOL));
+        return Ok(json!({
+            "success": false,
+            "error": format!("Amount too small after buffer deduction ({:.4} SOL)", BUFFER_SOL)
+        }));
     }
 
-    let txid = swap_directional(&keypair, SOL_MINT, USDC_MINT, actual_swap_amount).await?;
-    Ok(json_ok(&txid))
+    swap_directional(&keypair, SOL_MINT, USDC_MINT, actual_swap_amount).await
 }
 
 pub async fn swap_usdc_to_sol_fixed_json(req: JsonInput) -> Result<Value> {
     let amount = req.amount.unwrap_or(0);
     if amount == 0 {
-        return Err(anyhow!("USDC amount must be greater than zero"));
+        return Ok(json!({ "success": false, "error": "USDC amount must be greater than zero" }));
     }
 
     let keypair = decode_keypair(&req.private_key)?;
@@ -113,16 +109,21 @@ pub async fn swap_usdc_to_sol_fixed_json(req: JsonInput) -> Result<Value> {
     let fee = sol_to_lamports(FEE_SOL);
     let balance = rpc.get_balance(&pubkey).await?;
     if balance < fee {
-        return Err(anyhow!("Insufficient SOL for fee (minimum required is {} SOL)", FEE_SOL));
+        return Ok(json!({
+            "success": false,
+            "error": format!("Insufficient SOL for fee (minimum required is {} SOL)", FEE_SOL)
+        }));
     }
 
     let actual_balance = get_token_balance(&rpc, &pubkey, USDC_MINT).await?;
     if amount > actual_balance {
-        return Err(anyhow!("Insufficient USDC: you only have {} USDC", actual_balance));
+        return Ok(json!({
+            "success": false,
+            "error": format!("Insufficient USDC: you only have {}", actual_balance)
+        }));
     }
 
-    let txid = swap_directional(&keypair, USDC_MINT, SOL_MINT, amount).await?;
-    Ok(json_ok(&txid))
+    swap_directional(&keypair, USDC_MINT, SOL_MINT, amount).await
 }
 
 async fn swap_directional(
@@ -130,7 +131,7 @@ async fn swap_directional(
     input_mint: &str,
     output_mint: &str,
     amount: u64,
-) -> Result<String> {
+) -> Result<Value> {
     let pubkey = keypair.pubkey();
     let client = Client::new();
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
@@ -185,12 +186,13 @@ async fn swap_directional(
             .await?;
 
         let text = swap_res.text().await?;
-        let swap_val: Value = serde_json::from_str(&text)?;
+        let swap_val: Value = match serde_json::from_str(&text) {
+            Ok(val) => val,
+            Err(_) => continue,
+        };
 
-        if let Some(err) = swap_val.get("simulationError") {
-            if !err.is_null() {
-                continue;
-            }
+        if swap_val.get("simulationError").is_some() && !swap_val["simulationError"].is_null() {
+            continue;
         }
 
         if swap_val.get("swapTransaction").is_none() {
@@ -207,7 +209,10 @@ async fn swap_directional(
             match rpc.send_transaction(&signed_tx).await {
                 Ok(sig) => {
                     let _ = rpc.confirm_transaction(&sig).await;
-                    return Ok(sig.to_string());
+                    return Ok(json!({
+                        "success": true,
+                        "txid": sig.to_string()
+                    }));
                 }
                 Err(_) => {
                     sleep(Duration::from_secs(3)).await;
@@ -216,5 +221,8 @@ async fn swap_directional(
         }
     }
 
-    Err(anyhow!("All swap routes failed"))
+    Ok(json!({
+        "success": false,
+        "error": "All swap routes failed"
+    }))
 }

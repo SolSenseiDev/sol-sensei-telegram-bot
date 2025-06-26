@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde_json::{json, Value};
 use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
@@ -14,27 +14,21 @@ use solana_sdk::{
 use spl_associated_token_account::{get_associated_token_address, instruction::create_associated_token_account};
 use spl_token::{instruction::transfer_checked, id as token_program_id};
 
-use crate::utils::{decode_keypair, respond_empty, respond_with_txid, JsonInput};
+use crate::utils::{decode_keypair, JsonInput};
 
 const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-#[derive(Deserialize)]
-struct WithdrawRequest {
-    private_key: String,
-    to_address: String,
-    amount: u64,
-}
+pub async fn handle_withdraw_sol(input: JsonInput) -> Result<Value> {
+    let to_address = input
+        .ca
+        .ok_or_else(|| anyhow!("Missing `ca` (to_address)"))?;
+    let amount = input
+        .amount
+        .ok_or_else(|| anyhow!("Missing `amount`"))?;
 
-pub async fn handle_withdraw_sol(input: JsonInput) -> Result<()> {
-    let req = WithdrawRequest {
-        private_key: input.private_key,
-        to_address: input.ca.ok_or_else(|| anyhow!("Missing `ca` (to_address)"))?,
-        amount: input.amount.ok_or_else(|| anyhow!("Missing `amount`"))?,
-    };
-
-    let keypair = decode_keypair(&req.private_key)?;
+    let keypair = decode_keypair(&input.private_key)?;
     let from = keypair.pubkey();
-    let to_pubkey = Pubkey::from_str(&req.to_address)?;
+    let to_pubkey = Pubkey::from_str(&to_address)?;
 
     let rpc = RpcClient::new_with_commitment(
         "https://api.mainnet-beta.solana.com".to_string(),
@@ -42,28 +36,32 @@ pub async fn handle_withdraw_sol(input: JsonInput) -> Result<()> {
     );
 
     let blockhash = rpc.get_latest_blockhash().await?;
-    let ix = system_instruction::transfer(&from, &to_pubkey, req.amount);
+    let ix = system_instruction::transfer(&from, &to_pubkey, amount);
     let msg = Message::new(&[ix], Some(&from));
     let tx = Transaction::new(&[&keypair], msg, blockhash);
 
-    match rpc.send_and_confirm_transaction(&tx).await {
-        Ok(sig) => respond_with_txid(Ok(sig.to_string())),
-        Err(err) => respond_empty(Err(anyhow!("SOL transaction failed: {}", err))),
-    }
+    let sig = rpc
+        .send_and_confirm_transaction(&tx)
+        .await
+        .map_err(|e| anyhow!("SOL transaction failed: {}", e))?;
 
-    Ok(())
+    Ok(json!({
+        "success": true,
+        "txid": sig.to_string()
+    }))
 }
 
-pub async fn handle_withdraw_usdc(input: JsonInput) -> Result<()> {
-    let req = WithdrawRequest {
-        private_key: input.private_key,
-        to_address: input.ca.ok_or_else(|| anyhow!("Missing `ca` (to_address)"))?,
-        amount: input.amount.ok_or_else(|| anyhow!("Missing `amount`"))?,
-    };
+pub async fn handle_withdraw_usdc(input: JsonInput) -> Result<Value> {
+    let to_address = input
+        .ca
+        .ok_or_else(|| anyhow!("Missing `ca` (to_address)"))?;
+    let amount = input
+        .amount
+        .ok_or_else(|| anyhow!("Missing `amount`"))?;
 
-    let keypair = decode_keypair(&req.private_key)?;
+    let keypair = decode_keypair(&input.private_key)?;
     let from = keypair.pubkey();
-    let to = Pubkey::from_str(&req.to_address)?;
+    let to = Pubkey::from_str(&to_address)?;
     let mint = Pubkey::from_str(USDC_MINT)?;
 
     let from_ata = get_associated_token_address(&from, &mint);
@@ -75,7 +73,6 @@ pub async fn handle_withdraw_usdc(input: JsonInput) -> Result<()> {
     );
 
     let blockhash = rpc.get_latest_blockhash().await?;
-
     let mut instructions = vec![];
 
     if rpc.get_account(&to_ata).await.is_err() {
@@ -90,7 +87,7 @@ pub async fn handle_withdraw_usdc(input: JsonInput) -> Result<()> {
         &to_ata,
         &from,
         &[],
-        req.amount,
+        amount,
         6,
     )?;
     instructions.push(transfer_ix);
@@ -98,10 +95,13 @@ pub async fn handle_withdraw_usdc(input: JsonInput) -> Result<()> {
     let msg = Message::new(&instructions, Some(&from));
     let tx = Transaction::new(&[&keypair], msg, blockhash);
 
-    match rpc.send_and_confirm_transaction(&tx).await {
-        Ok(sig) => respond_with_txid(Ok(sig.to_string())),
-        Err(err) => respond_empty(Err(anyhow!("USDC transaction failed: {}", err))),
-    }
+    let sig = rpc
+        .send_and_confirm_transaction(&tx)
+        .await
+        .map_err(|e| anyhow!("USDC transaction failed: {}", e))?;
 
-    Ok(())
+    Ok(json!({
+        "success": true,
+        "txid": sig.to_string()
+    }))
 }
