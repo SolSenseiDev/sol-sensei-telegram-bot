@@ -1,25 +1,125 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InputMediaPhoto
-from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramBadRequest
+import asyncio
 from datetime import datetime
 import inspect
 
-from bot.services.rust_swap import buy_sell_token_from_wallets
-from bot.services.solana import get_wallet_balance
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from bot.database.db import async_session
 from bot.states.buy_sell import BuySellStates
 from bot.utils.token_info import fetch_token_info, format_token_info_message
-from bot.utils.common import go_back_to_main_menu
-from bot.database.db import async_session
-from bot.keyboards.buy_sell import get_buy_sell_keyboard_with_wallets
 from bot.utils.value_data import (
+    check_sol_swap_possibility,
+    check_token_balance_for_sell,
     get_user_with_wallets,
     get_balances_for_wallets,
     get_token_balances_in_usdc,
     get_token_balance,
 )
+from bot.utils.pnl import record_swap_and_update, get_real_time_pnl
+from bot.services.rust_swap import buy_sell_token_from_wallets
+from bot.services.solana import get_wallet_balance
+from bot.utils.common import go_back_to_main_menu
+from bot.keyboards.buy_sell import get_buy_sell_keyboard_with_wallets
 
 router = Router(name="buy_sell")
+
+
+async def run_buy_sell(
+    source,
+    ca: str,
+    mode: str,
+    wallets: list,
+    get_amount_fn
+):
+    info = await fetch_token_info(ca)
+    if not info or float(info.get("price", 0)) <= 0:
+        await source.answer("❌ Failed to fetch token info.")
+        return
+
+    token_price = float(info["price"])
+    success, failed = [], {}
+
+    for w in wallets:
+        amt = await (get_amount_fn(w) if inspect.iscoroutinefunction(get_amount_fn) else get_amount_fn(w))
+        if not isinstance(amt, int) or amt <= 0:
+            failed[w.address] = "❌ Invalid amount"
+            continue
+
+        if mode == "buy":
+            ok, err, sol_bal = await check_sol_swap_possibility(w.address)
+            if not ok or sol_bal * 1e9 < amt:
+                failed[w.address] = err or "❌ Not enough SOL"
+                continue
+        else:
+            ok, err, tok_bal = await check_token_balance_for_sell(w.address, ca)
+            if not ok or tok_bal < amt:
+                failed[w.address] = err or "❌ Not enough tokens"
+                continue
+
+        res = await buy_sell_token_from_wallets([w], ca, mode, amt)
+        if not (res and res[0]):
+            failed[w.address] = list(res[1].values())[0] if res and res[1] else "❌ Swap failed"
+            continue
+
+        txid = res[0][0][1]
+        token_amount = amt / 1e6
+        amount_usdc  = token_amount * token_price
+        if mode == "sell":
+            token_amount = -token_amount
+            amount_usdc  = -amount_usdc
+
+        async with async_session() as session:  # type: AsyncSession
+            await record_swap_and_update(
+                session=session,
+                user_id=w.user_id,
+                wallet_address=w.address,
+                token=ca,
+                delta_usdc=amount_usdc,
+                delta_tokens=token_amount,
+                price_per_token=token_price,
+                txid=txid
+            )
+
+        success.append((w.address, txid))
+
+    await asyncio.sleep(0.25)
+    await send_buy_sell_result(source, success, failed)
+
+
+async def get_token_ui_components(
+    wallets,
+    ca: str,
+    mode: str,
+    selected: set
+):
+    info = await fetch_token_info(ca)
+    if not info:
+        return None, None, None
+
+    pnl = None
+    if wallets:
+        async with async_session() as session:
+            pnl = await get_real_time_pnl(session, wallets[0].user_id, ca)
+
+    if mode == "sell":
+        balances = await get_token_balances_in_usdc(wallets, ca)
+        tuples = [(w.address, balances.get(w.address, 0.0)) for w in wallets]
+        keyboard = get_buy_sell_keyboard_with_wallets(
+            ca, tuples, selected, mode,
+            token_price=info["price"],
+            token_balances=balances
+        )
+    else:
+        sol_balances, _ = await get_balances_for_wallets(wallets)
+        tuples = [(w.address, sol_balances.get(w.address, 0.0)) for w in wallets]
+        keyboard = get_buy_sell_keyboard_with_wallets(ca, tuples, selected, mode)
+
+    caption = format_token_info_message(info, updated_at=datetime.utcnow(), token_pnl=pnl)
+    return caption, keyboard, info.get("icon")
 
 
 def get_buy_amount_in_lamports(value: str) -> int:
@@ -40,123 +140,33 @@ async def get_sell_amount(wallet_address: str, token_mint: str, percent: int) ->
         return 0
 
 
-async def run_buy_sell(source, ca: str, mode: str, wallets: list, get_amount_fn):
-    from bot.utils.value_data import check_sol_swap_possibility, check_token_balance_for_sell
-
-    success = []
-    failed = {}
-
-    for w in wallets:
-        try:
-            amount = await get_amount_fn(w) if inspect.iscoroutinefunction(get_amount_fn) else get_amount_fn(w)
-
-            if not isinstance(amount, int) or amount <= 0:
-                failed[w.address] = f"❌ Invalid amount: {amount}"
-                continue
-
-            if mode == "buy":
-                ok, err, sol_balance = await check_sol_swap_possibility(w.address)
-                sol_balance_lamports = int(sol_balance * 1_000_000_000)
-
-                if not ok:
-                    failed[w.address] = err
-                    continue
-
-                if sol_balance_lamports < amount:
-                    failed[w.address] = (
-                        f"❌ Not enough SOL: need {amount / 1e9:.4f}, available {sol_balance:.4f}"
-                    )
-                    continue
-
-            else:  # mode == "sell"
-                ok, err, token_balance = await check_token_balance_for_sell(w.address, ca)
-                if not ok:
-                    failed[w.address] = err
-                    continue
-                if token_balance < amount:
-                    failed[w.address] = (
-                        f"❌ Not enough tokens: need {amount / 1e6:.2f}, available {token_balance / 1e6:.2f}"
-                    )
-                    continue
-
-            result = await buy_sell_token_from_wallets([w], ca, mode, amount)
-
-            if result and isinstance(result, tuple) and result[0]:
-                txid = result[0][0][1]
-                success.append((w.address, txid))
-            else:
-                error = list(result[1].values())[0] if result and result[1] else "❌ Transaction failed"
-                failed[w.address] = error
-
-        except Exception as e:
-            failed[w.address] = f"❌ Internal error: {str(e)}"
-
-    await send_buy_sell_result(source, success, failed)
-
-
-async def get_token_ui_components(wallets, ca: str, mode: str, selected: set):
-    info = await fetch_token_info(ca)
-    if not info:
-        return None, None, None
-
-    if mode == "sell":
-        balances_token = await get_token_balances_in_usdc(wallets, ca)
-        wallet_tuples = [(w.address, balances_token.get(w.address, 0.0)) for w in wallets]
-        keyboard = get_buy_sell_keyboard_with_wallets(
-            ca, wallet_tuples, selected, mode,
-            token_price=info["price"],
-            token_balances=balances_token
-        )
-    else:
-        balances_sol, _ = await get_balances_for_wallets(wallets)
-        wallet_tuples = [(w.address, balances_sol.get(w.address, 0.0)) for w in wallets]
-        keyboard = get_buy_sell_keyboard_with_wallets(ca, wallet_tuples, selected, mode)
-
-    caption = format_token_info_message(info, updated_at=datetime.utcnow())
-    return caption, keyboard, info.get("icon")
-
-
 async def send_token_ui(msg_or_cb, caption: str, keyboard, icon_url: str):
+    is_callback = isinstance(msg_or_cb, CallbackQuery)
+    msg = msg_or_cb.message if is_callback else msg_or_cb
+
     try:
-        is_callback = isinstance(msg_or_cb, CallbackQuery)
-        msg = msg_or_cb.message if is_callback else msg_or_cb
-
-        # Если есть иконка и сообщение содержит фото — редактируем media
-        if icon_url and getattr(msg, "photo", None):
-            media = InputMediaPhoto(media=icon_url, caption=caption, parse_mode="HTML")
-            await msg.edit_media(media=media, reply_markup=keyboard)
-
-        # Если есть иконка, но нет фото — удаляем старое и шлём новое
-        elif icon_url and not getattr(msg, "photo", None):
-            if is_callback:
+        if is_callback:
+            try:
                 await msg.delete()
-            await msg.answer_photo(photo=icon_url, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+            except TelegramBadRequest:
+                pass
 
-        # Если иконки нет — всегда редактируем (не создаём новое сообщение!)
+        if icon_url:
+            await msg_or_cb.bot.send_photo(
+                chat_id=msg.chat.id,
+                photo=icon_url,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
         else:
-            if is_callback:
-                await msg.edit_text(
-                    text=caption,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                    disable_web_page_preview=True
-                )
-            else:
-                # Если всё же это обычное сообщение, тоже пробуем отредактировать (например, после custom input)
-                try:
-                    await msg.edit_text(
-                        text=caption,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                        disable_web_page_preview=True
-                    )
-                except TelegramBadRequest:
-                    await msg.answer(
-                        text=caption,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                        disable_web_page_preview=True
-                    )
+            await msg_or_cb.bot.send_message(
+                chat_id=msg.chat.id,
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
 
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -174,10 +184,22 @@ async def handle_custom_buy_amount(message: Message, state: FSMContext):
         return
 
     data = await state.get_data()
-    ca = data.get("token_ca")
-    wallet_addrs = set(data.get("selected_wallets", []))
+    callback_query: CallbackQuery | None = data.get("last_callback")
+
+    if callback_query:
+        try:
+            await callback_query.message.delete()
+        except:
+            pass
+        try:
+            await callback_query.answer("⏳ Processing buy...", show_alert=True)
+        except:
+            pass
 
     await message.answer("⏳ Processing buy...")
+
+    ca = data.get("token_ca")
+    wallet_addrs = set(data.get("selected_wallets", []))
 
     async with async_session() as session:
         user = await get_user_with_wallets(message.from_user.id, session)
@@ -202,11 +224,18 @@ async def handle_custom_sell_percent(message: Message, state: FSMContext):
         await message.answer("❌ Enter a number between 1 and 100 — the percentage of tokens to sell.")
         return
 
+    await message.answer("⏳ Processing sell...")
+
     data = await state.get_data()
     ca = data.get("token_ca")
     wallet_addrs = set(data.get("selected_wallets", []))
 
-    await message.answer("⏳ Processing sell...")
+    last_callback: CallbackQuery | None = data.get("last_callback")
+    if last_callback:
+        try:
+            await last_callback.message.delete()
+        except:
+            pass
 
     async with async_session() as session:
         user = await get_user_with_wallets(message.from_user.id, session)
@@ -260,7 +289,7 @@ async def handle_amount_selection(callback: CallbackQuery, state: FSMContext):
 
         await state.update_data(selected_wallets=list(wallet_addrs))
         components = await get_token_ui_components(user.wallets, ca, mode, wallet_addrs)
-        await send_token_ui(callback.message, *components)
+        await send_token_ui(callback, *components)
 
     except Exception as e:
         await callback.message.answer(f"❌ An error occurred: {str(e)}")
@@ -272,6 +301,8 @@ async def handle_custom_amount_request(callback: CallbackQuery, state: FSMContex
     if not data.get("selected_wallets"):
         await callback.answer("❗ Select at least one wallet.")
         return
+
+    await state.update_data(last_callback=callback)
 
     if "buy:custom" in callback.data:
         await state.set_state(BuySellStates.entering_buy_amount)
@@ -332,7 +363,7 @@ async def handle_confirm_buy_sell(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(BuySellStates.choosing_mode)
     components = await get_token_ui_components(user.wallets, ca, mode, set(wallets))
-    await send_token_ui(callback.message, *components)
+    await send_token_ui(callback, *components)
 
 
 @router.callback_query(lambda c: c.data == "back_to_main")
@@ -390,7 +421,7 @@ async def handle_wallet_toggle(callback: CallbackQuery, state: FSMContext):
         user = await get_user_with_wallets(callback.from_user.id, session)
 
     components = await get_token_ui_components(user.wallets, ca, mode, selected)
-    await send_token_ui(callback.message, *components)
+    await send_token_ui(callback, *components)
 
     await callback.answer()
 
@@ -414,7 +445,7 @@ async def handle_mode_switch(callback: CallbackQuery, state: FSMContext):
         user = await get_user_with_wallets(callback.from_user.id, session)
 
     components = await get_token_ui_components(user.wallets, ca, mode, selected)
-    await send_token_ui(callback.message, *components)
+    await send_token_ui(callback, *components)
 
     await callback.answer()
 
@@ -437,6 +468,6 @@ async def handle_refresh(callback: CallbackQuery, state: FSMContext):
         user = await get_user_with_wallets(callback.from_user.id, session)
 
     components = await get_token_ui_components(user.wallets, ca, mode, selected)
-    await send_token_ui(callback.message, *components)
+    await send_token_ui(callback, *components)
 
     await callback.answer("🔄 Refreshed.")
