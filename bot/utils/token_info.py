@@ -54,7 +54,12 @@ async def fetch_token_info(ca: str) -> dict | None:
             return None
 
 
-def format_token_info_message(data: dict, updated_at: datetime | None = None, include_link: bool = True) -> str:
+def format_token_info_message(
+    data: dict,
+    updated_at: datetime | None = None,
+    include_link: bool = True,
+    token_pnl: tuple[float, float] | None = None
+) -> str:
     vol = data.get("volume", {})
     ca = data['ca']
 
@@ -65,6 +70,17 @@ def format_token_info_message(data: dict, updated_at: datetime | None = None, in
         f"<code>• {label:<3}:       {value:>{max_len}}</code>"
         for label, value in values.items()
     )
+
+    # Format PnL if provided
+    pnl_line = ""
+    if token_pnl is not None:
+        pnl_dollars, pnl_percent = token_pnl
+        arrow = "▲" if pnl_dollars >= 0 else "▼"
+        color = "#00cc66" if pnl_dollars >= 0 else "#ff5555"
+        pnl_line = (
+            f"\n\n💹 <b>Your PnL:</b> "
+            f"<b>{arrow} ${abs(pnl_dollars):.5f} ({abs(pnl_percent):.1f}%)</b>"
+        )
 
     updated_line = (
         f"\n\n⏱️ Last updated at {updated_at.strftime('%H:%M:%S')} UTC"
@@ -83,6 +99,7 @@ def format_token_info_message(data: dict, updated_at: datetime | None = None, in
         f"💰 <b>Market Cap:</b> {format_number(data['fdv'])}\n"
         f"💧 <b>Liquidity:</b> {format_number(data['liquidity'])}\n\n"
         f"📊 <b>Volume:</b>\n{volume_lines}"
+        f"{pnl_line}"
         f"{link_line}"
         f"{updated_line}"
     )
