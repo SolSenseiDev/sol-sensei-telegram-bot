@@ -10,7 +10,7 @@ def get_main_menu() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                InlineKeyboardButton(text="❓ Help", callback_data="help")
+                InlineKeyboardButton(text="📈 Earn with Sensei", callback_data="earn_menu")
             ]
         ]
     )
