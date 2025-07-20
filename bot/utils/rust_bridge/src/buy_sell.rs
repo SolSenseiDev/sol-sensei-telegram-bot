@@ -1,14 +1,19 @@
+// src/buy_sell.rs
+
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_client::{
+    nonblocking::rpc_client::RpcClient,
+    rpc_config::RpcSendTransactionConfig,
+};
 use solana_sdk::{
+    commitment_config::CommitmentLevel,
     message::{Message, VersionedMessage},
     signature::Signer,
     transaction::{Transaction, VersionedTransaction},
 };
-use tokio::time::{sleep, Duration};
 use reqwest::Client;
 use spl_token::id as token_program_id;
 use spl_associated_token_account::{
@@ -30,14 +35,26 @@ pub async fn buy_token_with_sol_fixed_json(input: JsonInput) -> Result<Value> {
     let keypair = decode_keypair(&input.private_key)?;
     let ca = input.ca.ok_or_else(|| anyhow!("Missing token address"))?;
     let amount = input.amount.ok_or_else(|| anyhow!("Missing amount"))?;
-    swap_directional(&keypair, SOL_MINT, &ca, amount).await
+
+    let slippage = input.slippage_bps.unwrap_or(100);
+    let total_fee = input
+        .total_fee_lamports
+        .unwrap_or(sol_to_lamports(FEE_SOL));
+
+    swap_directional(&keypair, SOL_MINT, &ca, amount, slippage, total_fee).await
 }
 
 pub async fn sell_token_for_sol_fixed_json(input: JsonInput) -> Result<Value> {
     let keypair = decode_keypair(&input.private_key)?;
     let ca = input.ca.ok_or_else(|| anyhow!("Missing token address"))?;
     let amount = input.amount.ok_or_else(|| anyhow!("Missing amount"))?;
-    swap_directional(&keypair, &ca, SOL_MINT, amount).await
+
+    let slippage = input.slippage_bps.unwrap_or(100);
+    let total_fee = input
+        .total_fee_lamports
+        .unwrap_or(sol_to_lamports(FEE_SOL));
+
+    swap_directional(&keypair, &ca, SOL_MINT, amount, slippage, total_fee).await
 }
 
 async fn swap_directional(
@@ -45,45 +62,48 @@ async fn swap_directional(
     input_mint: &str,
     output_mint: &str,
     amount: u64,
+    slippage_bps: u16,
+    total_fee_lamports: u64,
 ) -> Result<Value> {
     let pubkey = keypair.pubkey();
     let client = Client::new();
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
 
-if input_mint == SOL_MINT {
-    let wsol_ata = get_associated_token_address(&pubkey, &spl_token::native_mint::id());
-    if rpc.get_account(&wsol_ata).await.is_err() {
-        let ix = create_associated_token_account(
-            &pubkey,
-            &pubkey,
-            &spl_token::native_mint::id(),
-            &token_program_id(),
-        );
-        let blockhash = rpc.get_latest_blockhash().await?;
-        let msg = Message::new(&[ix], Some(&pubkey));
-        let tx = Transaction::new(&[keypair], msg, blockhash);
-        let _ = rpc.send_transaction(&tx).await?;
+    if input_mint == SOL_MINT {
+        let wsol_ata = get_associated_token_address(&pubkey, &spl_token::native_mint::id());
+        if rpc.get_account(&wsol_ata).await.is_err() {
+            let ix = create_associated_token_account(
+                &pubkey,
+                &pubkey,
+                &spl_token::native_mint::id(),
+                &token_program_id(),
+            );
+            let blockhash = rpc.get_latest_blockhash().await?;
+            let msg = Message::new(&[ix], Some(&pubkey));
+            let tx = Transaction::new(&[keypair], msg, blockhash);
+            let _ = rpc.send_transaction(&tx).await?;
+        }
     }
-}
-
 
     let quote_url = format!(
-        "https://lite-api.jup.ag/swap/v1/quote?inputMint={}&outputMint={}&amount={}&slippageBps=100",
-        input_mint, output_mint, amount
+        "https://lite-api.jup.ag/swap/v1/quote?inputMint={}&outputMint={}&amount={}&slippageBps={}",
+        input_mint, output_mint, amount, slippage_bps
     );
     let quote_res = client.get(&quote_url).send().await?;
-    let quote_json: Value = quote_res.json().await?;
+    let mut quote_json: Value = quote_res.json().await?;
 
+    let compute_unit_limit = quote_json["computeUnitLimit"].as_u64().unwrap_or(200_000);
     let route_plan = quote_json["routePlan"].clone();
-    let mut modified_quote = quote_json.clone();
-    modified_quote["routePlan"] = route_plan;
+    quote_json["routePlan"] = route_plan;
+
+    let cup_price_micro = total_fee_lamports.saturating_mul(1_000_000) / compute_unit_limit;
 
     let payload = json!({
-        "quoteResponse": modified_quote,
+        "quoteResponse": quote_json,
         "userPublicKey": pubkey.to_string(),
         "wrapAndUnwrapSol": true,
         "asLegacyTransaction": false,
-        "computeUnitPriceMicroLamports": sol_to_lamports(FEE_SOL) / 1_000
+        "computeUnitPriceMicroLamports": cup_price_micro
     });
 
     let swap_res = client
@@ -91,52 +111,48 @@ if input_mint == SOL_MINT {
         .json(&payload)
         .send()
         .await?;
-
     let text = swap_res.text().await?;
-    let swap_val: Value = match serde_json::from_str(&text) {
-        Ok(val) => val,
-        Err(_) => {
-            return Ok(json!({
-                "success": false,
-                "error": "Invalid swap response"
-            }))
+    let swap_val: Value = serde_json::from_str(&text)
+        .map_err(|_| anyhow!("Invalid swap response"))?;
+
+    if let Some(err) = swap_val.get("simulationError") {
+        if !err.is_null() {
+            return Ok(json!({"success": false, "error": "Simulation failed"}));
         }
-    };
-
-    if swap_val.get("simulationError").is_some() && !swap_val["simulationError"].is_null() {
-        return Ok(json!({
-            "success": false,
-            "error": "Simulation failed"
-        }));
     }
-
     if swap_val.get("swapTransaction").is_none() {
-        return Ok(json!({
-            "success": false,
-            "error": "No swap transaction returned"
-        }));
+        return Ok(json!({"success": false, "error": "No swap transaction returned"}));
     }
 
-    let swap: SwapResponse = serde_json::from_value(swap_val)?;
+    let swap: SwapResponse = serde_json::from_value(swap_val.clone())?;
     let tx_bytes = STANDARD.decode(&swap.swap_transaction)?;
     let unsigned_tx: VersionedTransaction = bincode::deserialize(&tx_bytes)?;
     let message: VersionedMessage = unsigned_tx.message;
     let signed_tx = VersionedTransaction::try_new(message, &[keypair])?;
 
-    for _ in 0..3 {
-        match rpc.send_transaction(&signed_tx).await {
-            Ok(sig) => {
-                return Ok(json!({
-                    "success": true,
-                    "txid": sig.to_string()
-                }));
-            }
-            Err(_) => sleep(Duration::from_millis(500)).await,
-        }
-    }
+    let config = RpcSendTransactionConfig {
+        skip_preflight: true,
+        preflight_commitment: Some(CommitmentLevel::Processed),
+        ..Default::default()
+    };
+
+    let in_amount = quote_json["inAmount"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(amount);
+    let out_amount = quote_json["outAmount"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let sig = rpc
+        .send_transaction_with_config(&signed_tx, config)
+        .await?;
 
     Ok(json!({
-        "success": false,
-        "error": "Swap transaction failed"
+        "success":    true,
+        "txid":       sig.to_string(),
+        "in_amount":  in_amount,
+        "out_amount": out_amount
     }))
 }
