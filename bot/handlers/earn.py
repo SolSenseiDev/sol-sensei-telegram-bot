@@ -122,7 +122,6 @@ async def my_referral_handler(callback: CallbackQuery):
             return
 
         if not user.referral_code:
-            # Generate unique code
             while True:
                 code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
                 exists = await session.execute(select(User).where(User.referral_code == code))

@@ -39,20 +39,23 @@ async def render_main_menu(
         return text
 
     if isinstance(target, Message):
-        await target.answer(text, reply_markup=markup)
+        await target.answer(text, reply_markup=markup, parse_mode="HTML")
         if state:
             await state.update_data(
                 current_chat_id=target.chat.id,
                 current_message_id=target.message_id
             )
     elif isinstance(target, CallbackQuery):
-        await target.message.edit_text(text, reply_markup=markup)
+        try:
+            await target.message.delete()
+        except:
+            pass
+        await target.message.answer(text, reply_markup=markup, parse_mode="HTML")
         if state:
             await state.update_data(
                 current_chat_id=target.message.chat.id,
                 current_message_id=target.message.message_id
             )
-        await target.answer()
 
 
 @start_router.message(CommandStart())

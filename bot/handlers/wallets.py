@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select, delete
 from solders.keypair import Keypair
+from sqlalchemy import func
 import base58
 
 from bot.database.models import Wallet, User
@@ -35,15 +36,16 @@ async def show_wallets(callback: CallbackQuery):
 
         if not user or not user.wallets:
             try:
-                await callback.message.edit_text(
-                    "💼 <b>Your Wallets</b>\n\n"
-                    "You don't have any wallets yet. Click ➕ to create one.",
-                    reply_markup=get_wallets_keyboard([], {}, {}, set())
-                )
-            except TelegramBadRequest as e:
-                if "message is not modified" not in str(e):
-                    raise e
-            await callback.answer()
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+
+            await callback.message.answer(
+                "💼 <b>Your Wallets</b>\n\n"
+                "You don't have any wallets yet. Click ➕ to create one.",
+                reply_markup=get_wallets_keyboard([], {}, {}, set()),
+                parse_mode="HTML"
+            )
             return
 
         sol_price = await fetch_sol_price()
@@ -63,15 +65,15 @@ async def show_wallets(callback: CallbackQuery):
         )
 
         try:
-            await callback.message.edit_text(
-                text,
-                reply_markup=get_wallets_keyboard(user.wallets, balances_sol, balances_usdc, selected)
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
-                raise e
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
 
-    await callback.answer()
+        await callback.message.answer(
+            text,
+            reply_markup=get_wallets_keyboard(user.wallets, balances_sol, balances_usdc, selected),
+            parse_mode="HTML"
+        )
 
 
 @wallets_router.callback_query(F.data.startswith("copy_wallet_balance:"))
@@ -89,6 +91,8 @@ async def create_new_wallet(callback: CallbackQuery, state: FSMContext):
     pubkey, seed = generate_wallet()
     encrypted = encrypt_seed(seed)
 
+    MAX_WALLETS = 5
+
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
@@ -97,6 +101,13 @@ async def create_new_wallet(callback: CallbackQuery, state: FSMContext):
             user = User(telegram_id=telegram_id)
             session.add(user)
             await session.flush()
+
+        wallet_count = await session.scalar(
+            select(func.count(Wallet.id)).where(Wallet.user_id == user.id)
+        )
+        if wallet_count >= MAX_WALLETS:
+            await callback.answer(f"❗ You’ve reached the wallet limit ({MAX_WALLETS}).", show_alert=True)
+            return
 
         wallet = Wallet(address=pubkey, encrypted_seed=encrypted, user_id=user.id)
         session.add(wallet)
@@ -175,6 +186,8 @@ async def add_wallet_by_private_key(message: Message, state: FSMContext):
 
     encrypted = encrypt_seed(private_key)
 
+    MAX_WALLETS = 5
+
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
@@ -182,6 +195,14 @@ async def add_wallet_by_private_key(message: Message, state: FSMContext):
             user = User(telegram_id=telegram_id)
             session.add(user)
             await session.flush()
+
+        wallet_count = await session.scalar(
+            select(func.count(Wallet.id)).where(Wallet.user_id == user.id)
+        )
+        if wallet_count >= MAX_WALLETS:
+            await message.answer(f"❗ You’ve reached the wallet limit ({MAX_WALLETS}). Delete one to add another.")
+            await state.clear()
+            return
 
         exists = await session.execute(select(Wallet).where(Wallet.address == pubkey))
         if exists.scalar_one_or_none():

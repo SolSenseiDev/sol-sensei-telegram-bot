@@ -62,12 +62,15 @@ async def render_swap_menu(callback: CallbackQuery):
         lines.append(f"⏱ <i>Last updated: {current_time} UTC</i>")
 
         try:
-            await callback.message.edit_text("\n".join(lines), reply_markup=get_swap_keyboard())
-        except Exception as e:
-            if "message is not modified" not in str(e):
-                raise e
+            await callback.message.delete()
+        except Exception:
+            pass
 
-    await callback.answer()
+        await callback.message.answer(
+            "\n".join(lines),
+            reply_markup=get_swap_keyboard(),
+            parse_mode="HTML"
+        )
 
 
 @swap_router.callback_query(F.data == "swap")

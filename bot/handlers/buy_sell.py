@@ -7,8 +7,10 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from bot.database.models import User
 from bot.database.db import async_session
+
 from bot.states.buy_sell import BuySellStates
 from bot.utils.token_info import fetch_token_info, format_token_info_message
 from bot.utils.value_data import (
@@ -40,11 +42,26 @@ async def run_buy_sell(
         await source.answer("❌ Failed to fetch token info.")
         return
 
+    async with async_session() as session:
+        user = (await session.execute(
+            select(User).where(User.id == wallets[0].user_id)
+        )).scalar_one_or_none()
+
+    slippage_bps = (user.slippage_tolerance * 100) if user else 100
+    total_fee_lamports = int((float(user.tx_fee) if user else 0.001) * 1_000_000_000)
+
+    SOL_MINT = "So11111111111111111111111111111111111111112"
+    sol_info = await fetch_token_info(SOL_MINT)
+    sol_price = float(sol_info.get("price", 0)) if sol_info else 0.0
+    fee_sol = float(user.tx_fee) if user else 0.001
+    fee_usdc = fee_sol * sol_price
+
     token_price = float(info["price"])
     success, failed = [], {}
 
     for w in wallets:
-        amt = await (get_amount_fn(w) if inspect.iscoroutinefunction(get_amount_fn) else get_amount_fn(w))
+        amt = await (get_amount_fn(w) if inspect.iscoroutinefunction(get_amount_fn)
+                     else get_amount_fn(w))
         if not isinstance(amt, int) or amt <= 0:
             failed[w.address] = "❌ Invalid amount"
             continue
@@ -60,7 +77,14 @@ async def run_buy_sell(
                 failed[w.address] = err or "❌ Not enough tokens"
                 continue
 
-        res = await buy_sell_token_from_wallets([w], ca, mode, amt)
+        res = await buy_sell_token_from_wallets(
+            [w],
+            ca,
+            mode,
+            amt,
+            slippage_bps=slippage_bps,
+            total_fee_lamports=total_fee_lamports,
+        )
         if not (res and res[0]):
             failed[w.address] = list(res[1].values())[0] if res and res[1] else "❌ Swap failed"
             continue
@@ -71,14 +95,15 @@ async def run_buy_sell(
         if mode == "sell":
             token_amount = -token_amount
             amount_usdc  = -amount_usdc
+        amount_usdc_net = amount_usdc - fee_usdc
 
-        async with async_session() as session:  # type: AsyncSession
+        async with async_session() as session:
             await record_swap_and_update(
                 session=session,
                 user_id=w.user_id,
                 wallet_address=w.address,
                 token=ca,
-                delta_usdc=amount_usdc,
+                delta_usdc=amount_usdc_net,
                 delta_tokens=token_amount,
                 price_per_token=token_price,
                 txid=txid

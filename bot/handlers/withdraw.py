@@ -47,16 +47,15 @@ async def show_withdraw_options(callback: CallbackQuery):
     text = "\n".join(lines)
 
     try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_withdraw_keyboard()
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise e
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
 
-    await callback.answer()
-
+    await callback.message.answer(
+        text,
+        reply_markup=get_withdraw_keyboard(),
+        parse_mode="HTML"
+    )
 
 
 @withdraw_router.callback_query(F.data == "withdraw_sol")
