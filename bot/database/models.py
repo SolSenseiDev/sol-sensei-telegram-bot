@@ -26,6 +26,8 @@ class User(Base):
 
     wallets = relationship("Wallet", back_populates="user")
     trades = relationship("Trade", back_populates="user")
+    slippage_tolerance = Column(Integer, default=1)
+    tx_fee = Column(Numeric(asdecimal=True), default=0.001)
 
 
 class Wallet(Base):
