@@ -56,21 +56,27 @@ Suitable for both beginners and advanced traders.
 ## 📚 Tech Stack
 
 ### 📦 Languages & Frameworks (Python)
-- `Python 3.11+`, `aiogram v3`, `FastAPI`  
-- `asyncpg`, `SQLAlchemy 2.x`, `Redis`  
-- `httpx`, `aiohttp`, `websockets`  
+- `Python 3.11+`, `aiogram v3`, `FastAPI`
+- `asyncpg`, `SQLAlchemy 2.x`, `Redis`
+- `httpx`, `aiohttp`, `websockets`
 
 ### 🧠 Blockchain & Crypto Libraries (Python)
-- `solders`, `solana-py`, `borsh`, `construct`  
-- `cryptography`, `secrets`, `ratelimit`  
+- `solders`, `solana-py`, `borsh`, `construct`
+- `cryptography`, `secrets`, `ratelimit`
 
-### 🦀 Languages & Frameworks (Rust)  
-- `solana-sdk`, `solana-client`, `spl-token`, `spl-associated-token-account`  
-- `serde`, `serde_json`, `bincode`, `bs58`, `base64`  
-- `tokio`, `reqwest`, `anyhow`  
+### 🦀 Languages & Frameworks (Rust)
+- `solana-sdk`, `solana-client`, `spl-token`, `spl-associated-token-account`
+- `serde`, `serde_json`, `bincode`, `bs58`, `base64`
+- `tokio`, `reqwest`, `anyhow`
+
+### 🔄 Python ↔ Rust Integration
+- Python communicates with Rust over `localhost` via HTTP (`FastAPI` ↔ `axum/warp`)
+- All blockchain operations are executed in Rust (swap, withdraw, ATA)
+- Python handles user interaction, validation, and routing logic
 
 ### 🐳 Infrastructure & Deployment
-- `Docker`, `docker-compose`  
+- `Docker`, `docker-compose`
+- Hosted on `Railway.app`, monitored via `UptimeRobot` and `Render`
 
 ---
 
