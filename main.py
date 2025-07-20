@@ -7,6 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from bot.handlers.settings import router as settings_router
 from bot.handlers.withdraw import withdraw_router
 from bot.handlers.start_buy_sell import router as start_buy_sell_router
 from bot.handlers.buy_sell import router as buy_sell_router
@@ -15,6 +16,7 @@ from bot.handlers.start_wallets import start_wallets_router
 from bot.handlers.start import start_router
 from bot.handlers.wallets import wallets_router
 from bot.handlers.swap import swap_router
+from bot.handlers.earn import earn_router
 
 from manage_rust import build_rust, OUTPUT_BIN
 
@@ -43,9 +45,11 @@ async def main():
     dp.include_router(swap_router)
     dp.include_router(start_wallets_router)
     dp.include_router(main_menu_router)
+    dp.include_router(earn_router)
     dp.include_router(buy_sell_router)
     dp.include_router(start_buy_sell_router)
     dp.include_router(withdraw_router)
+    dp.include_router(settings_router)
 
     print("🤖 Bot is running...")
     try:
