@@ -71,7 +71,6 @@ def format_token_info_message(
         for label, value in values.items()
     )
 
-    # Format PnL if provided
     pnl_line = ""
     if token_pnl is not None:
         pnl_dollars, pnl_percent = token_pnl
@@ -79,7 +78,7 @@ def format_token_info_message(
         color = "#00cc66" if pnl_dollars >= 0 else "#ff5555"
         pnl_line = (
             f"\n\n💹 <b>Your PnL:</b> "
-            f"<b>{arrow} ${abs(pnl_dollars):.5f} ({abs(pnl_percent):.1f}%)</b>"
+            f"<b>{arrow} ${abs(pnl_dollars):.2f} ({abs(pnl_percent):.1f}%)</b>"
         )
 
     updated_line = (
