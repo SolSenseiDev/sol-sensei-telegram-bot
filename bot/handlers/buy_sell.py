@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 import inspect
 
+from decimal import Decimal
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -21,7 +22,7 @@ from bot.utils.value_data import (
     get_token_balances_in_usdc,
     get_token_balance,
 )
-from bot.utils.pnl import record_swap_and_update, get_real_time_pnl
+from bot.utils.pnl import record_swap_and_update, get_real_time_pnl, get_position, reset_position_if_empty
 from bot.services.rust_swap import buy_sell_token_from_wallets
 from bot.services.solana import get_wallet_balance
 from bot.utils.common import go_back_to_main_menu
@@ -42,33 +43,33 @@ async def run_buy_sell(
         await source.answer("❌ Failed to fetch token info.")
         return
 
-    # load user and compute slippage/CU‐fee
     async with async_session() as session:
         user = (await session.execute(
             select(User).where(User.id == wallets[0].user_id)
         )).scalar_one_or_none()
+
     slippage_bps = (user.slippage_tolerance * 100) if user else 100
     total_fee_lamports = int((float(user.tx_fee) if user else 0.001) * 1_000_000_000)
 
-    # convert SOL‐fee into USDC to subtract only on sell
     SOL_MINT = "So11111111111111111111111111111111111111112"
     sol_info = await fetch_token_info(SOL_MINT)
-    sol_price = float(sol_info.get("price", 0)) if sol_info else 0.0
-    fee_sol = float(user.tx_fee) if user else 0.001
+    sol_price = Decimal(sol_info.get("price", 0)) if sol_info else Decimal(0)
+    fee_sol = Decimal(user.tx_fee) if user else Decimal("0.001")
     fee_usdc = fee_sol * sol_price
 
-    token_price = float(info["price"])
+    token_price = Decimal(info["price"])
+    token_decimals = info.get("decimals", 6)
+    token_decimals_pow = Decimal(10) ** token_decimals
+
     success, failed = [], {}
 
     for w in wallets:
-        # determine amount in lamports or tokens
         amt = await (get_amount_fn(w) if inspect.iscoroutinefunction(get_amount_fn)
                      else get_amount_fn(w))
         if not isinstance(amt, int) or amt <= 0:
             failed[w.address] = "❌ Invalid amount"
             continue
 
-        # check balances
         if mode == "buy":
             ok, err, sol_bal = await check_sol_swap_possibility(w.address)
             if not ok or sol_bal * 1e9 < amt:
@@ -80,7 +81,6 @@ async def run_buy_sell(
                 failed[w.address] = err or "❌ Not enough tokens"
                 continue
 
-        # perform the swap
         res = await buy_sell_token_from_wallets(
             [w],
             ca,
@@ -93,20 +93,22 @@ async def run_buy_sell(
             failed[w.address] = list(res[1].values())[0] if res and res[1] else "❌ Swap failed"
             continue
 
-        # unpack result
-        txid = res[0][0][1]
-        token_amount = amt / 1e6
-        amount_usdc = token_amount * token_price
+        result_dict = next((x for x in res[0] if x["address"] == w.address), None)
+        if not result_dict:
+            failed[w.address] = "❌ Unexpected result format"
+            continue
 
-        # compute deltas: for buy full cost, for sell net of fee
+        txid = result_dict["txid"]
+        in_amount = Decimal(result_dict["in_amount"])
+        out_amount = Decimal(result_dict["out_amount"])
+
         if mode == "buy":
-            delta_usdc =  amount_usdc
-            delta_tokens =  token_amount
+            delta_usdc = (in_amount / Decimal(1e9)) * sol_price
+            delta_tokens = out_amount / token_decimals_pow
         else:
-            delta_usdc = -(amount_usdc - fee_usdc)
-            delta_tokens = -token_amount
+            delta_usdc = (out_amount / Decimal(1e9)) * sol_price - fee_usdc
+            delta_tokens = -(in_amount / token_decimals_pow)
 
-        # record trade and update PnL/positions
         async with async_session() as session:
             await record_swap_and_update(
                 session=session,
@@ -136,9 +138,26 @@ async def get_token_ui_components(
         return None, None, None
 
     pnl = None
-    if wallets:
+    selected_wallets = [w for w in wallets if w.address in selected]
+
+    if selected_wallets:
         async with async_session() as session:
-            pnl = await get_real_time_pnl(session, wallets[0].user_id, ca)
+            total_pnl = Decimal(0)
+            total_entry = Decimal(0)
+
+            for w in selected_wallets:
+                pnl_value, _ = await get_real_time_pnl(session, w.user_id, w.address, ca)
+                total_pnl += Decimal(str(pnl_value))
+
+                entry, _ = await get_position(session, w.user_id, w.address, ca)
+                total_entry += entry
+
+            if total_entry > 0:
+                percent = (total_pnl / total_entry) * 100
+            else:
+                percent = Decimal(0)
+
+            pnl = (float(total_pnl), float(percent))
 
     if mode == "sell":
         balances = await get_token_balances_in_usdc(wallets, ca)
