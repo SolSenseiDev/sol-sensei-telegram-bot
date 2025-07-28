@@ -54,10 +54,13 @@ class Trade(Base):
     amount_usdc = Column(Numeric(asdecimal=True), nullable=False)
     price_per_token = Column(Numeric(asdecimal=True), nullable=True)
 
+    realized_pnl = Column(Numeric(asdecimal=True), nullable=True)
+
     txid = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="trades")
+
 
 
 class Position(Base):
