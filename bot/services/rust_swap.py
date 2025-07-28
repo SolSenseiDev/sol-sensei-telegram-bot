@@ -163,8 +163,18 @@ async def buy_sell_token_from_wallets(
     amount: int | None = None,
     slippage_bps: int = 100,
     total_fee_lamports: int | None = None,
-) -> tuple[list[tuple[str, str]], dict]:
-
+) -> tuple[list[dict], dict]:
+    """
+    Returns:
+        success: list of dicts:
+            {
+                "address": str,
+                "txid": str,
+                "in_amount": int,
+                "out_amount": int
+            }
+        failed: dict[address: str] = error_message
+    """
     success, failed = [], {}
     rust_mode = "buy_fixed" if mode == "buy" else "sell_fixed"
 
@@ -183,11 +193,16 @@ async def buy_sell_token_from_wallets(
             )
 
             if result["success"]:
-                # append txid as before
-                success.append((w.address, result["txid"]))
+                success.append({
+                    "address": w.address,
+                    "txid": result["txid"],
+                    "in_amount": result.get("in_amount", 0),
+                    "out_amount": result.get("out_amount", 0),
+                })
             else:
                 failed[w.address] = result["error"]
         except Exception as e:
             failed[w.address] = str(e)
 
     return success, failed
+
