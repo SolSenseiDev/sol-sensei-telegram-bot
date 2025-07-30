@@ -3,9 +3,41 @@ from sqlalchemy import select, delete, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from bot.database.models import Position, Trade, TradeType, User
 from bot.utils.token_info import fetch_token_info
-from bot.utils.value_data import get_token_balance
+from bot.database.models import ReferralReward
 
 MINIMUM_REMAINING_THRESHOLD = Decimal("0.0001")
+
+
+async def award_points_for_active_referral(session: AsyncSession, user: User) -> None:
+    """
+    Awards 10 points to the referrer when a user becomes active (PnL >= 10)
+    and no reward has been granted yet.
+    """
+    if not user.referred_by:
+        return
+
+    if (user.pnl or Decimal(0)) < Decimal("100"):
+        return
+
+    # Check if reward already granted
+    existing = await session.execute(
+        select(ReferralReward).where(ReferralReward.referee_id == user.id)
+    )
+    if existing.scalar_one_or_none():
+        return
+
+    # Find referrer by their referral code
+    referrer_result = await session.execute(
+        select(User).where(User.referral_code == user.referred_by)
+    )
+    referrer = referrer_result.scalar_one_or_none()
+    if not referrer:
+        return
+
+    # Grant 10 points
+    referrer.points = (referrer.points or 0) + 10
+    reward = ReferralReward(referrer_id=referrer.id, referee_id=user.id)
+    session.add(reward)
 
 
 async def calculate_realized_pnl(
@@ -32,21 +64,18 @@ async def calculate_realized_pnl(
     position = result.scalar_one_or_none()
 
     if not position or position.token_amount <= 0:
-        print(f"[realized_pnl] ⚠️ No position found or zero token amount — skipping")
         return Decimal("0")
 
     entry_total = position.entry_amount_usdc
     held_tokens = position.token_amount
 
     if sell_amount_tokens > held_tokens:
-        print(f"[realized_pnl] ⚠️ Trying to sell more than held — capping to held tokens")
         sell_amount_tokens = held_tokens
 
     entry_proportional = entry_total * (sell_amount_tokens / held_tokens)
 
     realized = sell_amount_usdc - entry_proportional
 
-    print(f"[realized_pnl] 🔎 entry: ${entry_proportional:.6f}, exit: ${sell_amount_usdc:.6f}, realized: ${realized:.6f}")
 
     return realized
 
@@ -55,9 +84,9 @@ async def update_realized_pnl(session: AsyncSession, user_id: int, delta: Decima
     """
     Increment user's realized PnL by `delta` only if it's positive.
     Also awards points: +1 for every $10 of total PnL.
+    Triggers referral bonus if user becomes active (>= $10 realized PnL).
     """
     if delta <= 0:
-        print(f"[PNL] ❌ Realized PnL {delta:.6f} not added for user {user_id} (non-positive)")
         return
 
     result = await session.execute(
@@ -68,8 +97,6 @@ async def update_realized_pnl(session: AsyncSession, user_id: int, delta: Decima
     if user:
         # Update total PnL
         user.pnl = (user.pnl or Decimal(0)) + delta
-        print(f"[PNL] ✅ Realized PnL +{delta:.6f} added to user {user_id}")
-        print(f"[PNL] 📊 Total PnL for user {user_id}: {user.pnl:.6f}")
 
         # Recalculate total points
         total_points = int(user.pnl // Decimal("10"))
@@ -78,7 +105,9 @@ async def update_realized_pnl(session: AsyncSession, user_id: int, delta: Decima
         if total_points > current_points:
             earned = total_points - current_points
             user.points = total_points
-            print(f"[POINTS] 🏅 +{earned} points awarded to user {user_id} (now {user.points})")
+
+        # Award referral bonus if applicable
+        await award_points_for_active_referral(session, user)
 
     await session.commit()
 
@@ -93,11 +122,8 @@ async def record_swap_and_update(
     price_per_token: float,
     txid: str,
 ) -> None:
-    print(f"[RECORD] user={user_id}, wallet={wallet_address}, token={token}")
-    print(f"[RECORD] delta_tokens={delta_tokens}, delta_usdc={delta_usdc}")
 
     if abs(delta_tokens) < 0.000001:
-        print(f"[RECORD] 🚫 Ignored: delta_tokens too small ({delta_tokens})")
         return
 
     if delta_tokens < 0:
@@ -174,7 +200,6 @@ async def update_or_create_position(
 
     elif delta_tokens < 0 and position:
         if position.token_amount < abs(delta_tokens):
-            print(f"[PNL] ⚠️ Trying to sell more than held. Held: {position.token_amount}, Trying: {abs(delta_tokens)}")
             delta_tokens = position.token_amount
 
         remaining_tokens = position.token_amount + delta_tokens
@@ -203,14 +228,12 @@ async def get_real_time_pnl(
     )
     position = result.scalar_one_or_none()
     if not position:
-        print(f"[PNL] No position found for token: {token}")
         return 0.0, 0.0
 
     entry_total = position.entry_amount_usdc
     token_amount = position.token_amount.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
 
     if token_amount <= 0 and entry_total > 0:
-        print(f"[PNL] Balance is zero, but entry exists — skipping PnL display.")
         return 0.0, 0.0
 
     info = await fetch_token_info(token)
@@ -220,12 +243,6 @@ async def get_real_time_pnl(
     current_price = Decimal(str(info["price"]))
     current_total = token_amount * current_price
     pnl = current_total - entry_total
-
-    print(f"[PNL] Token: {token}")
-    print(f"[PNL] Wallet: {wallet_address} | entry: ${entry_total:.6f} | tokens: {token_amount}")
-    print(f"[PNL] Market price: ${current_price:.6f}")
-    print(f"[PNL] entry_total: ${entry_total:.6f}, current_total: ${current_total:.6f}")
-    print(f"[PNL] Calculated PnL: ${pnl:.4f} ({(pnl / entry_total * 100 if entry_total > 0 else 0):.2f}%)")
 
     return float(pnl), float(token_amount)
 
@@ -256,7 +273,6 @@ async def reset_position_if_empty(
                 )
             )
             await session.commit()
-            print(f"[position] 🧹 Cleared dust position: {remaining} tokens (< {MINIMUM_REMAINING_THRESHOLD})")
 
 
 async def get_position(
@@ -293,5 +309,5 @@ async def update_active_referrals(session: AsyncSession, user: User) -> None:
     )
     referred = res.scalars().all()
     user.referrals_total = len(referred)
-    user.referrals_active = sum(1 for u in referred if (u.pnl or 0) >= 10)
+    user.referrals_active = sum(1 for u in referred if (u.pnl or 0) >= 100)
     await session.commit()
