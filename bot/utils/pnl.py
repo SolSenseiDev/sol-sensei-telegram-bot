@@ -54,16 +54,33 @@ async def calculate_realized_pnl(
 async def update_realized_pnl(session: AsyncSession, user_id: int, delta: Decimal) -> None:
     """
     Increment user's realized PnL by `delta` only if it's positive.
+    Also awards points: +1 for every $10 of total PnL.
     """
     if delta <= 0:
+        print(f"[PNL] ❌ Realized PnL {delta:.6f} not added for user {user_id} (non-positive)")
         return
 
     result = await session.execute(
         select(User).where(User.id == user_id)
     )
     user = result.scalar_one_or_none()
+
     if user:
+        # Update total PnL
         user.pnl = (user.pnl or Decimal(0)) + delta
+        print(f"[PNL] ✅ Realized PnL +{delta:.6f} added to user {user_id}")
+        print(f"[PNL] 📊 Total PnL for user {user_id}: {user.pnl:.6f}")
+
+        # Recalculate total points
+        total_points = int(user.pnl // Decimal("10"))
+        current_points = user.points or 0
+
+        if total_points > current_points:
+            earned = total_points - current_points
+            user.points = total_points
+            print(f"[POINTS] 🏅 +{earned} points awarded to user {user_id} (now {user.points})")
+
+    await session.commit()
 
 
 async def record_swap_and_update(
@@ -118,7 +135,6 @@ async def record_swap_and_update(
     )
 
     await update_realized_pnl(session, user_id, realized)
-
     await session.commit()
 
 
